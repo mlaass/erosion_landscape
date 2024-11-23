@@ -1,0 +1,30 @@
+[gd_scene load_steps=6 format=3 uid="uid://c5bixwp18cjer"]
+
+[ext_resource type="Script" path="res://src/main.gd" id="1_ahfs3"]
+[ext_resource type="Script" path="res://src/erosion_controller.gd" id="2_88ixa"]
+[ext_resource type="Texture2D" uid="uid://dicxaqp23qwiw" path="res://Voronoi 8 - 512x512.png" id="3_s3swe"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_omtvp"]
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_xyvgn"]
+size = Vector2(100, 100)
+subdivide_width = 255
+subdivide_depth = 255
+
+[node name="Node3D" type="Node3D"]
+
+[node name="Terrain" type="MeshInstance3D" parent="."]
+unique_name_in_owner = true
+material_override = SubResource("ShaderMaterial_omtvp")
+mesh = SubResource("PlaneMesh_xyvgn")
+script = ExtResource("1_ahfs3")
+
+[node name="ErosionController" type="Node3D" parent="Terrain"]
+unique_name_in_owner = true
+script = ExtResource("2_88ixa")
+input_heightmap = ExtResource("3_s3swe")
+height_scale = 10.0
+
+[node name="Camera3D" type="Camera3D" parent="."]
+unique_name_in_owner = true
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 24.7925, 55)

@@ -1,0 +1,35 @@
+﻿#pragma kernel CSMain
+#include "Noise.hlsl"
+
+RWStructuredBuffer<float> heightMap;
+RWStructuredBuffer<int> minMax;
+StructuredBuffer<float2> offsets;
+int floatToIntMultiplier;
+
+int mapSize;
+int octaves;
+float lacunarity;
+float persistence;
+float scaleFactor;
+uint heightMapSize;
+
+
+[numthreads(64,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= heightMapSize) return;
+
+    int x = id.x % mapSize;
+    int y = id.x / mapSize;
+
+    float scale = scaleFactor;
+    float weight = 1;
+    for (int i = 0; i < octaves; i ++) {
+        heightMap[id.x] += snoise(float2(x,y)/mapSize * scale + offsets[i]) * weight;
+        scale *= lacunarity;
+        weight *= persistence;
+    }
+    int val = int(heightMap[id.x] * floatToIntMultiplier);
+    InterlockedMin(minMax[0],val);
+    InterlockedMax(minMax[1],val); 
+}
