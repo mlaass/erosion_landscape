@@ -19,6 +19,11 @@ extends Node3D
     erosion_enabled = true
     erode()
     erosion_enabled = false
+@export var reset_heightmap: bool = false:
+  set(value):
+    reset_heightmap = true
+    reset()
+    reset_heightmap = false
 
 @export var num_erosion_iterations: int = 50000
 @export var erosion_brush_radius: int = 3
@@ -33,8 +38,32 @@ extends Node3D
 @export var start_water: float = 1.0
 @export_range(0, 1) var inertia: float = 0.3
 
+@export_group("Voronoi Settings")
+@export var generate_voronoi: bool = false:
+    set(value):
+        generate_voronoi = false
+        generate_voronoi_heightmap()
+@export var num_voronoi_points: int = 10
+@export var height_falloff: float = 2.0
+@export_range(0.0, 1.0) var min_voronoi_height: float = 0.0
+@export_range(0.0, 1.0) var max_voronoi_height: float = 1.0
+@export_range(-1.0, 1.0) var ridge_multiplier: float = 0.01
+@export var amplitude: float = 1.0
+enum ScalingType {
+    LINEAR,
+    QUADRATIC,
+    EXPONENTIAL,
+    SIGMOID,
+    INVERSE,
+    POWER,
+}
+
+@export var scaling_type: ScalingType = ScalingType.POWER
+
 var rd: RenderingDevice
-var compute_shader: RID
+var erosion_compute_shader: RID
+var voronoi_compute_shader: RID
+
 var brush_indices: PackedInt32Array
 var brush_weights: PackedFloat32Array
 var random_indices: PackedInt32Array
@@ -42,31 +71,157 @@ var material: ShaderMaterial
 var heightmap_image: Image
 var heightmap_texture: ImageTexture
 
-func _ready():
-    initialize_compute()
-    setup_material()
-    if input_heightmap:
-      setup_heightmap()
-    erode()
+var original_input_heightmap: Image = null # Add this to store the original
 
-func initialize_compute():
+
+func _ready():
+  reset()
+  generate_voronoi_heightmap()
+
+func reset():
+  initialize_erosion_compute()
+  initialize_voronoi_compute()
+  if input_heightmap and not original_input_heightmap:
+    original_input_heightmap = input_heightmap.duplicate().get_image()  # Store original on startup
+  print("Resetting erosion")
+  setup_material()
+  setup_heightmap()
+
+func initialize_voronoi_compute():
+  if not rd:
+      rd = RenderingServer.create_local_rendering_device()
+
+  var shader_file := load("res://src/voronoi_heightmap_compute.glsl")
+  var shader_spirv: RDShaderSPIRV = shader_file.get_spirv()
+  voronoi_compute_shader = rd.shader_create_from_spirv(shader_spirv)
+  print("Voronoi compute shader created", voronoi_compute_shader)
+
+func generate_voronoi_heightmap():
+  if not rd:
+      rd = RenderingServer.create_local_rendering_device()
+
+
+  # First, verify shader is loaded
+  if not voronoi_compute_shader:
+      printerr("Voronoi compute shader not initialized")
+      return
+
+  var map_size = resolution + 1
+
+  # Generate random points for Voronoi cells
+  var points = PackedVector2Array()
+  for i in range(num_voronoi_points):
+      points.append(Vector2(randf(), randf()))
+  points[0] = Vector2(.5,.5)
+  # Create buffers
+  var heightmap_buffer = rd.storage_buffer_create(map_size * map_size * 4)
+  var points_buffer = rd.storage_buffer_create(points.size() * 8, points.to_byte_array())
+
+  # Create uniform set
+  var uniforms := [
+      create_uniform(heightmap_buffer, 0),
+      create_uniform(points_buffer, 1)
+  ]
+
+  # Verify shader and create pipeline first
+  var pipeline = rd.compute_pipeline_create(voronoi_compute_shader)
+  if not pipeline:
+      printerr("Failed to create compute pipeline")
+      return
+
+  var uniform_set = rd.uniform_set_create(uniforms, voronoi_compute_shader, 0)
+  if not uniform_set:
+      printerr("Failed to create uniform set")
+      return
+
+  # Set parameters - align to 16 bytes (4 floats per block)
+  var params := PackedFloat32Array([
+      float(map_size),
+      float(num_voronoi_points),
+      height_falloff,
+      min_voronoi_height,  # Complete first 16-byte block
+
+      max_voronoi_height,
+      ridge_multiplier,
+      float(scaling_type),
+      amplitude,
+  ])
+
+  # Dispatch compute shader
+  var compute_list = rd.compute_list_begin()
+  rd.compute_list_bind_compute_pipeline(compute_list, pipeline)
+  rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
+  rd.compute_list_set_push_constant(compute_list, params.to_byte_array(), params.size() * 4)
+
+  var workgroup_size = 16
+  var num_workgroups = (map_size + workgroup_size - 1) / workgroup_size
+  rd.compute_list_dispatch(compute_list, num_workgroups, num_workgroups, 1)
+
+  rd.compute_list_end()
+  rd.submit()
+  rd.sync()
+
+  # Get results and verify changes
+  var output_bytes = rd.buffer_get_data(heightmap_buffer)
+  var height_data = output_bytes.to_float32_array()
+
+  # Debug output
+  print("Voronoi heightmap generation complete")
+  print("Map size: ", map_size, "x", map_size)
+  print("Number of points: ", num_voronoi_points)
+  print("points: ",points)
+  print("Height range settings: ", min_voronoi_height, " to ", max_voronoi_height)
+
+  # Find actual min/max heights for verification
+  var min_height = 1.0
+  var max_height = 0.0
+  for height in height_data:
+      min_height = min(min_height, height)
+      max_height = max(max_height, height)
+  print("Actual height range: ", min_height, " to ", max_height)
+
+  # Create and update heightmap image
+  heightmap_image = Image.create(map_size, map_size, false, Image.FORMAT_RGB8)
+  for y in range(map_size):
+      for x in range(map_size):
+          var height = height_data[y * map_size + x]
+          heightmap_image.set_pixel(x, y, Color(height, height, height))
+
+  # Save debug image
+  heightmap_image.save_png("res://voronoi_heightmap_debug.png")
+  print("Debug heightmap saved to voronoi_heightmap_debug.png")
+
+  # Update texture for material
+  heightmap_image.generate_mipmaps()
+  heightmap_texture = ImageTexture.create_from_image(heightmap_image)
+  if material:
+      material.set_shader_parameter("heightmap", heightmap_texture)
+      print("Heightmap texture updated in material")
+  else:
+      printerr("No material found to update")
+
+  # Cleanup
+  rd.free_rid(heightmap_buffer)
+  rd.free_rid(points_buffer)
+
+func initialize_erosion_compute():
   rd = RenderingServer.create_local_rendering_device()
 
   var shader_file := load("res://src/erosion_compute.glsl")
   var shader_spirv: RDShaderSPIRV = shader_file.get_spirv()
-  compute_shader = rd.shader_create_from_spirv(shader_spirv)
+  erosion_compute_shader = rd.shader_create_from_spirv(shader_spirv)
 
   create_erosion_brush()
 
 func setup_material():
-  #var shader := load("res://src/heightmap_shader.gdshader")
-  #
-
   var mesh_instance = get_parent() if get_parent() is MeshInstance3D else null
   if mesh_instance:
     material = mesh_instance.material_override
-    mesh_instance.material_override = material
-  material.set_shader_parameter("height_scale", height_scale)
+    print("material %s"%material)
+
+  # Move heightmap setup to setup_heightmap() function
+  if material:
+    material.set_shader_parameter("height_scale", height_scale)
 
 func setup_heightmap():
   var mesh_instance = get_parent()
@@ -76,22 +231,17 @@ func setup_heightmap():
     print("Error: Parent must be a MeshInstance3D", mesh_instance)
     return
 
-  if not mesh_instance.mesh or mesh_instance.mesh is PlaneMesh == false:
-    var plane_mesh = PlaneMesh.new()
-    plane_mesh.size = terrain_size
-    plane_mesh.subdivide_width = resolution
-    plane_mesh.subdivide_depth = resolution
-    mesh_instance.mesh = plane_mesh
-
-  # Create initial heightmap texture
-  heightmap_image = input_heightmap.get_image()
-  heightmap_image.resize(resolution + 1, resolution + 1)
-  heightmap_texture = ImageTexture.create_from_image(heightmap_image)
-
-  # Update material
-  if not material:
-    setup_material()
-  material.set_shader_parameter("heightmap", heightmap_texture)
+  # Reset heightmap to original state
+  if original_input_heightmap:
+    print("Resetting heightmap image")
+    heightmap_image = original_input_heightmap.duplicate()
+    heightmap_image.resize(resolution + 1, resolution + 1)
+    heightmap_image.generate_mipmaps()
+    heightmap_texture = ImageTexture.create_from_image(heightmap_image)
+    if material:
+      print("Setting heightmap texture")
+      material.set_shader_parameter("heightmap", heightmap_texture)
+    return
 
 func create_erosion_brush():
   brush_indices = PackedInt32Array()
@@ -160,6 +310,9 @@ func erode():
   if not rd or not heightmap_image:
     printerr("No rendering device or heightmap")
     return
+
+  if input_heightmap and not original_input_heightmap:
+    original_input_heightmap = input_heightmap.duplicate()  # Store original on startup
 
   var map_size = resolution +1
 
@@ -237,8 +390,8 @@ func erode():
     create_uniform(random_buffer, 3)
   ]
 
-  var uniform_set = rd.uniform_set_create(uniforms, compute_shader, 0)
-  var pipeline = rd.compute_pipeline_create(compute_shader)
+  var uniform_set = rd.uniform_set_create(uniforms, erosion_compute_shader, 0)
+  var pipeline = rd.compute_pipeline_create(erosion_compute_shader)
 
   var params := PackedFloat32Array([
     # First 16-byte block (4 ints)
@@ -333,6 +486,7 @@ func erode():
   diff_image.save_png("res://debug_difference.png")
 
   # Update texture
+  heightmap_image.generate_mipmaps()
   heightmap_texture = ImageTexture.create_from_image(heightmap_image)
   material.set_shader_parameter("heightmap", heightmap_texture)
 

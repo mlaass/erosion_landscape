@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ketlvjhjummw"
+path="res://.godot/imported/voronoi_heightmap_compute.glsl-55d50021326df8ee380715b4b5bfd8e6.res"
+
+[deps]
+
+source_file="res://src/voronoi_heightmap_compute.glsl"
+dest_files=["res://.godot/imported/voronoi_heightmap_compute.glsl-55d50021326df8ee380715b4b5bfd8e6.res"]
+
+[params]
+

@@ -13,4 +13,5 @@ void fragment() {
     // Simple shading based on height
     float height = 1.-texture(heightmap, UV).r;
     ALBEDO = vec3(height) *color;
+    METALLIC = 1.-height;
 }

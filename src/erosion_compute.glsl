@@ -55,8 +55,8 @@ layout(push_constant) uniform Params {
 
   // Fourth 16-byte alignment block
   float start_water;
-  float padding1; // Add padding to maintain 16-byte alignment
-  float padding2;
+  float border_size;
+  float padding2; // Add padding to maintain 16-byte alignment
   float padding3;
 }
 params;
@@ -179,10 +179,10 @@ void main() {
     pos_y += dir.y;
 
     // Stop if outside map
-    if (pos_x < params.brush_radius ||
-        pos_x >= params.map_size - params.brush_radius ||
-        pos_y < params.brush_radius ||
-        pos_y >= params.map_size - params.brush_radius) {
+    if (pos_x < params.border_size ||
+        pos_x >= params.map_size - params.border_size ||
+        pos_y < params.border_size ||
+        pos_y >= params.map_size - params.border_size) {
       break;
     }
 
