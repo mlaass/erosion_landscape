@@ -225,7 +225,10 @@ void main() {
       for (int i = 0; i < params.brush_length; i++) {
         int erode_index = droplet_index + brush_data.brush_indices[i];
         if (erode_index >= 0 &&
-            erode_index < params.map_size * params.map_size) {
+            erode_index < params.map_size * params.map_size &&
+            node_y < int(params.map_size - 2.0) &&
+            node_x < int(params.map_size - 1.0) && node_y > int(+1.0) &&
+            node_x > int(+1.0)) {
           float weighted_erode_amount =
               amount_to_erode * brush_weights.brush_weights[i];
           // float delta_sediment = weighted_erode_amount;
@@ -233,6 +236,9 @@ void main() {
               min(height_map.heightmap[erode_index], weighted_erode_amount);
           height_map.heightmap[erode_index] -= delta_sediment;
           sediment += delta_sediment;
+        } else {
+          DEBUG_VALUE(13,
+                      float(node_y)); // Debug where erosion is being skipped
         }
       }
     }

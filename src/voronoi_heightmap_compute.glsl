@@ -113,9 +113,9 @@ void main() {
   int index = int(pixel_coords.y) * int(map_size) + int(pixel_coords.x);
   // heightmap[index] = pos.x;
   heightmap[index] = calculate_height(pos);
-  if (index == 50) {
-    heightmap[index] = 0.555;
-  }
+  // if (index == 50) {
+  //   heightmap[index] = 0.555;
+  // }
   // heightmap[index] = 0.0; // float(pixel_coords.x) / map_size;
   return;
 }
