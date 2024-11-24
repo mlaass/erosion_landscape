@@ -11,7 +11,7 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
     if event is InputEventMouseMotion:
         if event.button_mask == MOUSE_BUTTON_MASK_LEFT:
-            print("Rotating: ", event.relative)
+            #print("Rotating: ", event.relative)
             rotate_y(event.relative.x * rotation_speed)
             rotate_x(-event.relative.y * rotation_speed)
             rotation.x = clamp(rotation.x, -PI/2, PI/2)

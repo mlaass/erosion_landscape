@@ -1,3 +1,4 @@
+@tool
 extends Node3D
 
 @export_group("Input Settings")
@@ -13,19 +14,23 @@ extends Node3D
 @export var resolution: int = 255  # Must be power of 2 minus 1
 
 @export_group("Erosion Settings")
-@export var erosion_enabled: bool = false
+@export var erosion_enabled: bool = false:
+  set(value):
+    erosion_enabled = true
+    erode()
+    erosion_enabled = false
 
 @export var num_erosion_iterations: int = 50000
 @export var erosion_brush_radius: int = 3
-@export var max_lifetime: int = 50
-@export var sediment_capacity_factor: float = 8.0
+@export var max_lifetime: int = 30
+@export var sediment_capacity_factor: float = 4.0
 @export var min_sediment_capacity: float = 0.01
-@export var deposit_speed: float = 0.8
-@export var erode_speed: float = 0.8
+@export var deposit_speed: float = 0.5
+@export var erode_speed: float = 0.5
 @export var evaporate_speed: float = 0.01
-@export var gravity: float = 20.0
-@export var start_speed: float = 2.0
-@export var start_water: float = 1.5
+@export var gravity: float = 10.0
+@export var start_speed: float = 1.0
+@export var start_water: float = 1.0
 @export_range(0, 1) var inertia: float = 0.3
 
 var rd: RenderingDevice
@@ -54,14 +59,14 @@ func initialize_compute():
   create_erosion_brush()
 
 func setup_material():
-  var shader := load("res://src/heightmap_shader.gdshader")
-  material = ShaderMaterial.new()
-  material.shader = shader
-  material.set_shader_parameter("height_scale", height_scale)
+  #var shader := load("res://src/heightmap_shader.gdshader")
+  #
 
   var mesh_instance = get_parent() if get_parent() is MeshInstance3D else null
   if mesh_instance:
+    material = mesh_instance.material_override
     mesh_instance.material_override = material
+  material.set_shader_parameter("height_scale", height_scale)
 
 func setup_heightmap():
   var mesh_instance = get_parent()
@@ -150,117 +155,6 @@ func save_debug_images(original_data: PackedFloat32Array, eroded_data: PackedFlo
   # Save images
   heightmap_image.save_png("res://eroded_heightmap.png")
   diff_image.save_png("res://erosion_difference.png")
-
-func erode__():
-  if not rd or not heightmap_image:
-    printerr("no rd or no heightmap")
-    return
-
-  var map_size = resolution + 1
-
-  # Convert image to height data
-  var map_data = PackedFloat32Array()
-  map_data.resize(map_size * map_size)
-
-  # Store original heightmap data
-  var original_data = PackedFloat32Array()
-  original_data.resize(map_size * map_size)
-
-  for y in range(map_size):
-    for x in range(map_size):
-      var height = heightmap_image.get_pixel(x, y).r
-      map_data[y * map_size + x] = height
-      original_data[y * map_size + x] = height
-
-
-  #heightmap_image.lock()
-  for y in range(map_size):
-    for x in range(map_size):
-      map_data[y * map_size + x] = heightmap_image.get_pixel(x, y).r
-  #heightmap_image.unlock()
-
-  # Create random indices for droplets
-  random_indices = PackedInt32Array()
-  random_indices.resize(num_erosion_iterations)
-  for i in range(num_erosion_iterations):
-    var x = randi_range(erosion_brush_radius, map_size - erosion_brush_radius)
-    var y = randi_range(erosion_brush_radius, map_size - erosion_brush_radius)
-    random_indices[i] = y * map_size + x
-
-  # Create compute shader buffers
-  var heightmap_buffer = rd.storage_buffer_create(map_data.size() * 4, map_data.to_byte_array())
-  var brush_indices_buffer = rd.storage_buffer_create(brush_indices.size() * 4, brush_indices.to_byte_array())
-  var brush_weights_buffer = rd.storage_buffer_create(brush_weights.size() * 4, brush_weights.to_byte_array())
-  var random_buffer = rd.storage_buffer_create(random_indices.size() * 4, random_indices.to_byte_array())
-
-  # Create uniforms
-  var uniforms := [
-    create_uniform(heightmap_buffer, 0),
-    create_uniform(brush_indices_buffer, 1),
-    create_uniform(brush_weights_buffer, 2),
-    create_uniform(random_buffer, 3)
-  ]
-
-  var uniform_set = rd.uniform_set_create(uniforms, compute_shader, 0)
-  var pipeline = rd.compute_pipeline_create(compute_shader)
-
-  var params := PackedFloat32Array([
-    float(map_size),
-    float(brush_indices.size()),
-    float(erosion_brush_radius),
-    float(max_lifetime),
-    inertia,
-    sediment_capacity_factor,
-    min_sediment_capacity,
-    deposit_speed,
-    erode_speed,
-    evaporate_speed,
-    gravity,
-    start_speed,
-    start_water
-  ])
-
-  var compute_list = rd.compute_list_begin()
-  rd.compute_list_bind_compute_pipeline(compute_list, pipeline)
-  rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
-  rd.compute_list_set_push_constant(compute_list, params.to_byte_array(), params.size() * 4)
-
-  var workgroup_size = 16
-  var num_workgroups = (num_erosion_iterations + workgroup_size - 1) / workgroup_size
-  rd.compute_list_dispatch(compute_list, num_workgroups, 1, 1)
-
-  print("Debug dispatch info:")
-  print("- Workgroups: ", num_workgroups)
-  print("- Total threads: ", num_workgroups * workgroup_size)
-  print("- Iterations needed: ", num_erosion_iterations)
-
-  rd.compute_list_end()
-  rd.submit()
-  rd.sync()
-
-  # Get results and update texture
-  var output_bytes = rd.buffer_get_data(heightmap_buffer)
-  map_data = output_bytes.to_float32_array()
-
-  # Update heightmap image
-  for y in range(map_size):
-    for x in range(map_size):
-      var height = map_data[y * map_size + x]
-      heightmap_image.set_pixel(x, y, Color(height, height, height))
-
-  # Save debug visualizations
-  save_debug_images(original_data, map_data, map_size)
-
-  # Update texture
-  heightmap_texture = ImageTexture.create_from_image(heightmap_image)
-  material.set_shader_parameter("heightmap", heightmap_texture)
-
-  # Cleanup
-  rd.free_rid(heightmap_buffer)
-  rd.free_rid(brush_indices_buffer)
-  rd.free_rid(brush_weights_buffer)
-  rd.free_rid(random_buffer)
-
 
 func erode():
   if not rd or not heightmap_image:
