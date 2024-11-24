@@ -53,6 +53,10 @@ float apply_scaling(float dist, int type, float falloff) {
     height = pow(max(0.0, 1.0 - dist), falloff);
     break;
 
+  case 6: // Cosine
+    height = 0.5 * (1.0 + cos(dist * falloff * 3.14159));
+    break;
+
   default: // Fallback to linear
     height = 1.0 - dist;
   }

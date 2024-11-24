@@ -43,12 +43,34 @@ extends Node3D
     set(value):
         generate_voronoi = false
         generate_voronoi_heightmap()
-@export var num_voronoi_points: int = 10
-@export var height_falloff: float = 2.0
-@export_range(0.0, 1.0) var min_voronoi_height: float = 0.0
-@export_range(0.0, 1.0) var max_voronoi_height: float = 1.0
-@export_range(-1.0, 1.0) var ridge_multiplier: float = 0.01
-@export var amplitude: float = 1.0
+@export var voronoi_seed: int = 0:
+    set(value):
+        voronoi_seed = value
+        generate_voronoi_heightmap()
+@export var num_voronoi_points: int = 10:
+    set(value):
+        num_voronoi_points = value
+        generate_voronoi_heightmap()
+@export var height_falloff: float = 2.0:
+    set(value):
+        height_falloff = value
+        generate_voronoi_heightmap()
+@export_range(-1.0, 1.0) var min_voronoi_height: float = 0.0:
+    set(value):
+        min_voronoi_height = value
+        generate_voronoi_heightmap()
+@export_range(0.0, 1.0) var max_voronoi_height: float = 1.0:
+    set(value):
+        max_voronoi_height = value
+        generate_voronoi_heightmap()
+@export_range(-1.0, 1.0) var ridge_multiplier: float = 0.0:
+    set(value):
+        ridge_multiplier = value
+        generate_voronoi_heightmap()
+@export var amplitude: float = 1.0:
+    set(value):
+        amplitude = value
+        generate_voronoi_heightmap()
 enum ScalingType {
     LINEAR,
     QUADRATIC,
@@ -56,9 +78,13 @@ enum ScalingType {
     SIGMOID,
     INVERSE,
     POWER,
+    COSINE,
 }
 
-@export var scaling_type: ScalingType = ScalingType.POWER
+@export var scaling_type: ScalingType = ScalingType.POWER:
+    set(value):
+        scaling_type = value
+        generate_voronoi_heightmap()
 
 var rd: RenderingDevice
 var erosion_compute_shader: RID
@@ -109,10 +135,12 @@ func generate_voronoi_heightmap():
   var map_size = resolution + 1
 
   # Generate random points for Voronoi cells
+  var rng = RandomNumberGenerator.new()
+  rng.seed = voronoi_seed
   var points = PackedVector2Array()
   for i in range(num_voronoi_points):
-      points.append(Vector2(randf(), randf()))
-  points[0] = Vector2(.5,.5)
+      points.append(Vector2(rng.randf(), rng.randf()))
+  # points[0] = Vector2(.5,.5)
   # Create buffers
   var heightmap_buffer = rd.storage_buffer_create(map_size * map_size * 4)
   var points_buffer = rd.storage_buffer_create(points.size() * 8, points.to_byte_array())
