@@ -119,14 +119,14 @@ void vertex() {
     terrain_normal = normalize(final_normal);
     // height_value = final_height / total_weight;
     VERTEX.y = gain + height_value * amplitude;
-    NORMAL = terrain_normal;
+    //NORMAL = terrain_normal;
 }
 
 void fragment() {
     float height = 1.-height_value;
-    //ALBEDO = vec3(height) *c100olor;
+    //ALBEDO = vec3(height) *c100olor;.697
     ALBEDO = vec3(height) *color;
-    METALLIC = 1.-height;
+    METALLIC = 1.- mix(0.5,1.1,height);
     //ALBEDO = vec3(
       //get_blend_weight(tile_position_0, world_pos) +
       //get_blend_weight(tile_position_3, world_pos),
@@ -134,5 +134,5 @@ void fragment() {
       //get_blend_weight(tile_position_2, world_pos) +
       //get_blend_weight(tile_position_3, world_pos)) ;
     // Make higher areas smoother (like snow) and lower areas rougher
-    ROUGHNESS = 1.-height;
+    //ROUGHNESS = 1.-height;
 }

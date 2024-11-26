@@ -1,7 +1,9 @@
-[gd_scene load_steps=6 format=3 uid="uid://cir0gvceublc"]
+[gd_scene load_steps=12 format=3 uid="uid://cir0gvceublc"]
 
 [ext_resource type="Shader" path="res://src/terrain-vertex-shader.gdshader" id="1_5asjx"]
+[ext_resource type="PackedScene" uid="uid://bu3vtmwnoul1u" path="res://player/player_character.tscn" id="1_hcana"]
 [ext_resource type="Texture2D" uid="uid://r704mjydcc7e" path="res://eroded_heightmap.exr" id="2_cdigi"]
+[ext_resource type="Script" path="res://clipmap/clipmap.gd" id="4_2qn0f"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_a4j23"]
 render_priority = 0
@@ -15,7 +17,7 @@ shader_parameter/tile_size = 1000.0
 shader_parameter/blend_border = 100.0
 shader_parameter/color = Color(0.819491, 0.531773, 0.234875, 1)
 shader_parameter/amplitude = 300.0
-shader_parameter/gain = 0.0
+shader_parameter/gain = -200.0
 shader_parameter/heightmap_0 = ExtResource("2_cdigi")
 shader_parameter/heightmap_1 = ExtResource("2_cdigi")
 shader_parameter/heightmap_2 = ExtResource("2_cdigi")
@@ -23,25 +25,83 @@ shader_parameter/heightmap_3 = ExtResource("2_cdigi")
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_e5njl"]
 material = SubResource("ShaderMaterial_a4j23")
-size = Vector2(2400, 2400)
-subdivide_width = 2048
-subdivide_depth = 2048
+size = Vector2(250, 250)
+subdivide_width = 1024
+subdivide_depth = 1024
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_gppva"]
+material = SubResource("ShaderMaterial_a4j23")
+uv2_padding = 3.35
+size = Vector2(2000, 2000)
+subdivide_width = 1024
+subdivide_depth = 1024
 
 [sub_resource type="CapsuleMesh" id="CapsuleMesh_5nsvv"]
 
+[sub_resource type="Environment" id="Environment_xlk7n"]
+sdfgi_enabled = true
+fog_enabled = true
+fog_mode = 1
+fog_light_color = Color(0.62, 0.4836, 0.248, 1)
+fog_light_energy = 0.36
+fog_density = 0.1989
+fog_depth_begin = 200.0
+fog_depth_end = 300.0
+
+[sub_resource type="CameraAttributesPractical" id="CameraAttributesPractical_5deey"]
+auto_exposure_enabled = true
+auto_exposure_scale = 0.3
+auto_exposure_speed = 3.38
+dof_blur_far_enabled = true
+dof_blur_far_distance = 400.0
+dof_blur_far_transition = 300.0
+dof_blur_amount = 0.05
+
+[sub_resource type="Compositor" id="Compositor_bgh8d"]
+
 [node name="InfiniteTerrain" type="Node3D"]
 
-[node name="Terrain" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1024, 0, 890.366)
+[node name="PlayerCharacter" parent="." instance=ExtResource("1_hcana")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 250, 21.901, 250)
+
+[node name="Terrain" type="MeshInstance3D" parent="." node_paths=PackedStringArray("player_character")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 250, -50, 250)
+extra_cull_margin = 100.0
+ignore_occlusion_culling = true
+gi_mode = 2
+gi_lightmap_scale = 1
+visibility_range_end = 1000.0
+visibility_range_end_margin = 500.0
+visibility_range_fade_mode = 1
 mesh = SubResource("PlaneMesh_e5njl")
+script = ExtResource("4_2qn0f")
+player_character = NodePath("../PlayerCharacter")
+
+[node name="Terrain2" type="MeshInstance3D" parent="Terrain"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+extra_cull_margin = 100.0
+ignore_occlusion_culling = true
+gi_mode = 2
+gi_lightmap_scale = 1
+visibility_range_end = 1000.0
+visibility_range_end_margin = 500.0
+visibility_range_fade_mode = 1
+mesh = SubResource("PlaneMesh_gppva")
+skeleton = NodePath("../..")
 
 [node name="MeshInstance3D2" type="MeshInstance3D" parent="."]
 transform = Transform3D(-0.998145, 0.0608744, 0, -0.0608744, -0.998145, 0, 0, 0, 1, 384, 30, 384)
 mesh = SubResource("CapsuleMesh_5nsvv")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, -0.769121, 504.816, 0)
+transform = Transform3D(1, 0, 0, 0, 0.551937, 0.833886, 0, -0.833886, 0.551937, -0.769121, 504.816, 0)
+light_angular_distance = 2.0
 shadow_enabled = true
-shadow_bias = 2.898
-shadow_opacity = 0.78
-shadow_blur = 0.679
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 500.0
+directional_shadow_pancake_size = 0.1
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_xlk7n")
+camera_attributes = SubResource("CameraAttributesPractical_5deey")
+compositor = SubResource("Compositor_bgh8d")
