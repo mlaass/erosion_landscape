@@ -1,0 +1,44 @@
+[gd_scene load_steps=7 format=3 uid="uid://cir0gvceublc"]
+
+[ext_resource type="Shader" path="res://src/terrain-vertex-shader.gdshader" id="1_5asjx"]
+[ext_resource type="Texture2D" uid="uid://dicxaqp23qwiw" path="res://Voronoi 8 - 512x512.png" id="3_f1ho4"]
+[ext_resource type="Texture2D" uid="uid://d1cwaoqim5jes" path="res://voronoi_heightmap_debug.png" id="4_7y6yw"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_a4j23"]
+render_priority = 0
+shader = ExtResource("1_5asjx")
+shader_parameter/tile_position_0 = Vector2(0, 0)
+shader_parameter/tile_position_1 = Vector2(224, 0)
+shader_parameter/tile_position_2 = Vector2(0, 224)
+shader_parameter/tile_position_3 = Vector2(224, 224)
+shader_parameter/active_tiles = 4
+shader_parameter/tile_size = 256.0
+shader_parameter/blend_border = 32.0
+shader_parameter/heightmap_0 = ExtResource("4_7y6yw")
+shader_parameter/heightmap_1 = ExtResource("3_f1ho4")
+shader_parameter/heightmap_2 = ExtResource("3_f1ho4")
+shader_parameter/heightmap_3 = ExtResource("3_f1ho4")
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_e5njl"]
+material = SubResource("ShaderMaterial_a4j23")
+size = Vector2(2048, 2048)
+subdivide_width = 2048
+subdivide_depth = 2048
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_5nsvv"]
+
+[node name="InfiniteTerrain" type="Node3D"]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("PlaneMesh_e5njl")
+
+[node name="MeshInstance3D2" type="MeshInstance3D" parent="."]
+transform = Transform3D(-0.998145, 0.0608744, 0, -0.0608744, -0.998145, 0, 0, 0, 1, 256, 30, 0)
+mesh = SubResource("CapsuleMesh_5nsvv")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.670433, -0.306136, -0.67587, -0.28059, -0.738657, 0.612907, -0.686869, 0.600555, 0.409322, -0.769121, 504.816, 0)
+shadow_enabled = true
+shadow_bias = 2.898
+shadow_opacity = 0.78
+shadow_blur = 0.679
