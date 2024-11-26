@@ -1,0 +1,22 @@
+[gd_resource type="ShaderMaterial" load_steps=3 format=3 uid="uid://v48gahe5kxbl"]
+
+[ext_resource type="Shader" path="res://src/terrain-vertex-shader.gdshader" id="1_g8lje"]
+[ext_resource type="Texture2D" uid="uid://r704mjydcc7e" path="res://eroded_heightmap.exr" id="2_c668n"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_g8lje")
+shader_parameter/tile_position_0 = Vector2(1, 0)
+shader_parameter/tile_position_1 = Vector2(1, 2)
+shader_parameter/tile_position_2 = Vector2(1, 1)
+shader_parameter/tile_position_3 = Vector2(2, 1)
+shader_parameter/active_tiles = 4
+shader_parameter/tile_size = 256.0
+shader_parameter/blend_border = 100.0
+shader_parameter/color = Color(0.819491, 0.531773, 0.234875, 1)
+shader_parameter/amplitude = 300.0
+shader_parameter/gain = -100.0
+shader_parameter/heightmap_0 = ExtResource("2_c668n")
+shader_parameter/heightmap_1 = ExtResource("2_c668n")
+shader_parameter/heightmap_2 = ExtResource("2_c668n")
+shader_parameter/heightmap_3 = ExtResource("2_c668n")

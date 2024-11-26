@@ -209,15 +209,16 @@ func generate_voronoi_heightmap():
   print("Actual height range: ", min_height, " to ", max_height)
 
   # Create and update heightmap image
-  heightmap_image = Image.create(map_size, map_size, false, Image.FORMAT_RGB8)
+  heightmap_image = Image.create(map_size, map_size, false, Image.FORMAT_RF)
   for y in range(map_size):
       for x in range(map_size):
           var height = height_data[y * map_size + x]
-          heightmap_image.set_pixel(x, y, Color(height, height, height))
+          heightmap_image.set_pixel(x, y, Color(height, 0, 0, 0))
 
-  # Save debug image
   heightmap_image.save_png("res://voronoi_heightmap_debug.png")
-  print("Debug heightmap saved to voronoi_heightmap_debug.png")
+  # Save debug image as 32-bit EXR
+  heightmap_image.save_exr("res://voronoi_heightmap_debug.exr")
+  print("Debug heightmap saved to voronoi_heightmap_debug.exr")
 
   # Update texture for material
   heightmap_image.generate_mipmaps()
@@ -263,6 +264,7 @@ func setup_heightmap():
   if original_input_heightmap:
     print("Resetting heightmap image")
     heightmap_image = original_input_heightmap.duplicate()
+    heightmap_image.convert(Image.FORMAT_RF)
     heightmap_image.resize(resolution + 1, resolution + 1)
     heightmap_image.generate_mipmaps()
     heightmap_texture = ImageTexture.create_from_image(heightmap_image)
@@ -332,6 +334,7 @@ func save_debug_images(original_data: PackedFloat32Array, eroded_data: PackedFlo
 
   # Save images
   heightmap_image.save_png("res://eroded_heightmap.png")
+  heightmap_image.save_exr("res://eroded_heightmap.exr")  # Save as 32-bit EXR
   diff_image.save_png("res://erosion_difference.png")
 
 func erode():
@@ -493,7 +496,7 @@ func erode():
   for y in range(map_size):
     for x in range(map_size):
       var height = map_data[y * map_size + x]
-      heightmap_image.set_pixel(x, y, Color(height, height, height))
+      heightmap_image.set_pixel(x, y, Color(height, 0, 0, 0))
 
   # Save debug images
   var diff_image = Image.create(map_size, map_size, false, Image.FORMAT_RGB8)
@@ -510,8 +513,9 @@ func erode():
         color = Color(-diff/max_diff, 0, 0)
       diff_image.set_pixel(x, y, color)
 
-  heightmap_image.save_png("res://debug_result.png")
-  diff_image.save_png("res://debug_difference.png")
+  heightmap_image.save_exr("res://eroded_heightmap.exr")  # Save as 32-bit EXR
+  heightmap_image.save_png("res://eroded_heightmap.png")
+  diff_image.save_png("res://erosion_difference.png")
 
   # Update texture
   heightmap_image.generate_mipmaps()

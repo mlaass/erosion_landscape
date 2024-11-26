@@ -16,6 +16,8 @@ uniform float tile_size = 256.0;
 uniform float blend_border = 32.0;
 
 uniform vec3 color: source_color = vec3(1.,1.,1.);
+uniform float amplitude = 30.0;
+uniform float gain = 0.0;
 
 varying float height_value;
 varying vec2 world_pos;
@@ -116,7 +118,7 @@ void vertex() {
     height_value = final_height / max(total_weight, 0.25);
     terrain_normal = normalize(final_normal);
     // height_value = final_height / total_weight;
-    VERTEX.y = height_value * 30.;
+    VERTEX.y = gain + height_value * amplitude;
     NORMAL = terrain_normal;
 }
 

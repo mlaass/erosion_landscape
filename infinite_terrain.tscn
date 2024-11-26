@@ -1,8 +1,7 @@
-[gd_scene load_steps=7 format=3 uid="uid://cir0gvceublc"]
+[gd_scene load_steps=6 format=3 uid="uid://cir0gvceublc"]
 
 [ext_resource type="Shader" path="res://src/terrain-vertex-shader.gdshader" id="1_5asjx"]
-[ext_resource type="Texture2D" uid="uid://cgosxi8ueg6cv" path="res://debug_result.png" id="2_oo8n0"]
-[ext_resource type="Texture2D" uid="uid://dicxaqp23qwiw" path="res://Voronoi 8 - 512x512.png" id="3_f1ho4"]
+[ext_resource type="Texture2D" uid="uid://r704mjydcc7e" path="res://eroded_heightmap.exr" id="2_cdigi"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_a4j23"]
 render_priority = 0
@@ -12,17 +11,19 @@ shader_parameter/tile_position_1 = Vector2(1, 0)
 shader_parameter/tile_position_2 = Vector2(0, 1)
 shader_parameter/tile_position_3 = Vector2(1, 1)
 shader_parameter/active_tiles = 4
-shader_parameter/tile_size = 200.0
-shader_parameter/blend_border = 16.0
+shader_parameter/tile_size = 1000.0
+shader_parameter/blend_border = 100.0
 shader_parameter/color = Color(0.819491, 0.531773, 0.234875, 1)
-shader_parameter/heightmap_0 = ExtResource("2_oo8n0")
-shader_parameter/heightmap_1 = ExtResource("3_f1ho4")
-shader_parameter/heightmap_2 = ExtResource("2_oo8n0")
-shader_parameter/heightmap_3 = ExtResource("2_oo8n0")
+shader_parameter/amplitude = 300.0
+shader_parameter/gain = 0.0
+shader_parameter/heightmap_0 = ExtResource("2_cdigi")
+shader_parameter/heightmap_1 = ExtResource("2_cdigi")
+shader_parameter/heightmap_2 = ExtResource("2_cdigi")
+shader_parameter/heightmap_3 = ExtResource("2_cdigi")
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_e5njl"]
 material = SubResource("ShaderMaterial_a4j23")
-size = Vector2(2048, 2048)
+size = Vector2(2400, 2400)
 subdivide_width = 2048
 subdivide_depth = 2048
 
@@ -31,6 +32,7 @@ subdivide_depth = 2048
 [node name="InfiniteTerrain" type="Node3D"]
 
 [node name="Terrain" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1024, 0, 890.366)
 mesh = SubResource("PlaneMesh_e5njl")
 
 [node name="MeshInstance3D2" type="MeshInstance3D" parent="."]
