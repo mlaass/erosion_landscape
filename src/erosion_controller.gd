@@ -26,6 +26,7 @@ extends Node3D
     reset_heightmap = false
 
 @export var num_erosion_iterations: int = 50000
+@export var erosion_seed: int = 0
 @export var erosion_brush_radius: int = 3
 @export var max_lifetime: int = 30
 @export var sediment_capacity_factor: float = 4.0

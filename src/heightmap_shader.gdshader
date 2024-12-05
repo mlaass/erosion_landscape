@@ -18,26 +18,27 @@ uniform vec2 flat_scale = vec2(1.0, 1.0); // Same as steepness_scale but for fla
 
 
 varying float steepness;
+varying float height;
 
 float hval(vec2 pos){
   return  texture(heightmap,vec2(.5,.5)+ pos/map_size).r * height_scale;
 }
 
 void vertex() {
-  float height = hval(VERTEX.xz);
-  VERTEX.y = height ;
+  float vheight = hval(VERTEX.xz);
+  VERTEX.y = vheight ;
   vec2 e = vec2(3.5, 0.0);
   vec3 normal = normalize(vec3(hval(VERTEX.xz - e) - hval(VERTEX.xz + e), 2.0 * e.x, hval(VERTEX.xz - e.yx) - hval(VERTEX.xz + e.yx)));
   NORMAL = normal;
   steepness = (1.0 - dot(NORMAL, vec3(0.0, 1.0, 0.0))) * 2.0; // or even * 4.0
+  height =texture(heightmap,vec2(.5,.5)+ VERTEX.xz/map_size).r ;
 }
 
 void fragment() {
-    float height = texture(heightmap, UV).r;
 
     // Create UV coordinates for both textures
     vec2 texture_uv = vec2(
-        VERTEX.x * steepness_scale.x,
+        UV.x * steepness_scale.x,
         (1.-height) * steepness_scale.y
     );
 

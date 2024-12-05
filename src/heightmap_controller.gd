@@ -43,6 +43,7 @@ extends Node3D
 
 @export var num_erosion_iterations: int = 50000
 @export var erosion_brush_radius: int = 3
+@export var erosion_seed: int = 0
 @export var max_lifetime: int = 30
 @export var sediment_capacity_factor: float = 4.0
 @export var min_sediment_capacity: float = 0.01
@@ -143,6 +144,7 @@ func generate_voronoi_heightmap() -> void:
 func apply_erosion() -> void:
     erosion_generator.num_iterations = num_erosion_iterations
     erosion_generator.brush_radius = erosion_brush_radius
+    erosion_generator.seed_value = erosion_seed
     erosion_generator.max_lifetime = max_lifetime
     erosion_generator.sediment_capacity_factor = sediment_capacity_factor
     erosion_generator.min_sediment_capacity = min_sediment_capacity

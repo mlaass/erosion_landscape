@@ -9,6 +9,7 @@ var random_indices: PackedInt32Array
 
 # Erosion settings
 var num_iterations: int = 50000
+var seed_value: int = 0
 var brush_radius: int = 3
 var max_lifetime: int = 30
 var sediment_capacity_factor: float = 4.0
@@ -114,12 +115,16 @@ func generate_erosion_heightmap():
     print("- Random indices size: ", random_indices.size())
 
 
-  # Create random indices for droplets
+  # Create random indices for droplets using a seeded RNG
+  var rng = RandomNumberGenerator.new()
+  if seed_value > 0:
+    rng.seed = seed_value
+
   random_indices = PackedInt32Array()
   random_indices.resize(num_iterations)
   for i in range(num_iterations):
-    var _x = randi_range(brush_radius, map_size - brush_radius)
-    var _y = randi_range(brush_radius, map_size - brush_radius)
+    var _x = rng.randi_range(brush_radius, map_size - brush_radius)
+    var _y = rng.randi_range(brush_radius, map_size - brush_radius)
     random_indices[i] = _y * map_size + _x
 
   if debug_output:
@@ -225,22 +230,27 @@ func generate_erosion_heightmap():
         else:
           color = Color(-diff/max_diff, 0, 0)
         diff_image.set_pixel(x, y, color)
-
     diff_image.save_png("res://erosion_difference.png")
-    save_debug_image(heightmap_image, "eroded_heightmap_debug")
+    #end debug
 
   # TODO: This is a temporary hack to get the heightmap to update
   # TODO: better to use set_data if possibe, without having to set each pixel
   #heightmap_image.set_data(map_data)
+  heightmap_image = Image.create(map_size, map_size, false, Image.FORMAT_RF)
   # Update heightmap image
   for y in range(map_size):
     for x in range(map_size):
       var height = map_data[y * map_size + x]
-      heightmap_image.set_pixel(x, y, Color(height, 0, 0, 0))
+      heightmap_image.set_pixel(x, y, Color(height, height, height, 0))
+
 
   # Update texture
   heightmap_image.generate_mipmaps()
   heightmap_texture = ImageTexture.create_from_image(heightmap_image)
+  if debug_output:
+    save_debug_image(heightmap_image, "eroded_heightmap_debug")
+  save_heightmap_exr("res://eroded_heightmap.exr")
+  save_heightmap_png("res://eroded_heightmap.png")
 
   # Cleanup
   rd.free_rid(heightmap_buffer)
@@ -278,5 +288,3 @@ func generate_erosion_heightmap():
           count += 1
           if count >= 10:  # Only show first 10 changes
             break
-
-
