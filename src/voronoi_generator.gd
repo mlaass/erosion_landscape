@@ -15,6 +15,10 @@ var seed_value: int = 0
 enum ScalingType { LINEAR, QUADRATIC, EXPONENTIAL, SIGMOID, INVERSE, POWER, COSINE }
 var scaling_type: ScalingType = ScalingType.POWER
 
+# NEW: Tile position for seamless tiling
+var tile_x: int = 0
+var tile_y: int = 0
+
 func _init():
     initialize_compute()
 
@@ -39,23 +43,14 @@ func generate_voronoi_heightmap():
       printerr("Voronoi compute shader not initialized")
       return
 
+  # No longer need to generate random points - done in shader!
 
-  # Generate random points for Voronoi cells
-  var rng = RandomNumberGenerator.new()
-  if seed_value > 0:
-    rng.seed = seed_value
-  var points = PackedVector2Array()
-  for i in range(num_points):
-      points.append(Vector2(rng.randf(), rng.randf()))
-  # points[0] = Vector2(.5,.5)
-  # Create buffers
+  # Create buffers - only heightmap buffer needed now
   var heightmap_buffer = rd.storage_buffer_create(map_size * map_size * 4)
-  var points_buffer = rd.storage_buffer_create(points.size() * 8, points.to_byte_array())
 
-  # Create uniform set
+  # Create uniform set - only heightmap buffer
   var uniforms := [
       create_uniform(heightmap_buffer, 0),
-      create_uniform(points_buffer, 1)
   ]
 
   # Verify shader and create pipeline first
@@ -71,15 +66,23 @@ func generate_voronoi_heightmap():
 
   # Set parameters - align to 16 bytes (4 floats per block)
   var params := PackedFloat32Array([
+      # Block 1
       float(map_size),
       float(num_points),
-      height_falloff,
-      min_height,  # Complete first 16-byte block
+      float(tile_x),          # NEW: tile position
+      float(tile_y),          # NEW: tile position
 
+      # Block 2
+      height_falloff,
+      min_height,
       max_height,
       ridge_multiplier,
+
+      # Block 3
       float(scaling_type),
       amplitude,
+      float(seed_value),      # NEW: global seed
+      0.0,  # padding
   ])
 
   # Dispatch compute shader
@@ -101,7 +104,6 @@ func generate_voronoi_heightmap():
   var height_data = output_bytes.to_float32_array()
   # Cleanup
   rd.free_rid(heightmap_buffer)
-  rd.free_rid(points_buffer)
 
   # Create and update heightmap image
   heightmap_image = Image.create(map_size, map_size, false, Image.FORMAT_RF)
@@ -125,9 +127,9 @@ func generate_voronoi_heightmap():
         actual_min_height = min(actual_min_height, height)
         actual_max_height = max(actual_max_height, height)
     print("Voronoi heightmap generation complete")
+    print("Tile position: (%d, %d)" % [tile_x, tile_y])
     print("Map size: ", map_size, "x", map_size)
-    print("Number of points: ", num_points)
-    print("points: ",points)
+    print("Number of points per tile: ", num_points)
     print("Height range settings: ", min_height, " to ", max_height)
     print("Actual height range: ", actual_min_height, " to ", actual_max_height)
-    save_debug_image(heightmap_image, "voronoi_heightmap_debug")
+    save_debug_image(heightmap_image, "voronoi_tile_%d_%d" % [tile_x, tile_y])
