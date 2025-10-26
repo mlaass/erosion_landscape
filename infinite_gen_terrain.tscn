@@ -1,9 +1,10 @@
-[gd_scene load_steps=10 format=3 uid="uid://b7ymq3uk8b51b"]
+[gd_scene load_steps=11 format=3 uid="uid://b7ymq3uk8b51b"]
 
 [ext_resource type="Shader" path="res://src/infinite_terrain.gdshader" id="1_shader"]
-[ext_resource type="Texture2D" uid="uid://b027t2prwavcv" path="res://output/exr/eroded_tile_final_0_3.exr" id="2_dm1af"]
+[ext_resource type="Texture2D" uid="uid://j5ihofmhm44b" path="res://output/exr/eroded_tile_final_0_0.exr" id="2_e4x5m"]
 [ext_resource type="Script" path="res://src/infinite_gen_terrain.gd" id="2_script"]
 [ext_resource type="PackedScene" uid="uid://bu3vtmwnoul1u" path="res://player/player_character.tscn" id="3_player"]
+[ext_resource type="Texture2D" uid="uid://b46of4ah1jjwv" path="res://output/exr/eroded_tile_final_0_1.exr" id="3_tlr0p"]
 
 [sub_resource type="PlaceholderTexture2D" id="placeholder_tex"]
 
@@ -11,7 +12,7 @@
 render_priority = 0
 shader = ExtResource("1_shader")
 shader_parameter/tile_position_0 = Vector2(0, 0)
-shader_parameter/tile_position_1 = Vector2(0, 0)
+shader_parameter/tile_position_1 = Vector2(0, 1)
 shader_parameter/tile_position_2 = Vector2(0, 0)
 shader_parameter/tile_position_3 = Vector2(0, 0)
 shader_parameter/tile_position_4 = null
@@ -24,8 +25,9 @@ shader_parameter/tile_size = 256.0
 shader_parameter/color = Color(0.82, 0.53, 0.23, 1)
 shader_parameter/amplitude = 30.0
 shader_parameter/gain = 0.0
-shader_parameter/heightmap_0 = ExtResource("2_dm1af")
-shader_parameter/heightmap_1 = SubResource("placeholder_tex")
+shader_parameter/disable_normals = false
+shader_parameter/heightmap_0 = ExtResource("2_e4x5m")
+shader_parameter/heightmap_1 = ExtResource("3_tlr0p")
 shader_parameter/heightmap_2 = SubResource("placeholder_tex")
 shader_parameter/heightmap_3 = SubResource("placeholder_tex")
 
@@ -66,7 +68,7 @@ dof_blur_amount = 0.05
 [node name="InfiniteGenTerrain" type="Node3D"]
 
 [node name="Terrain" type="MeshInstance3D" parent="." node_paths=PackedStringArray("player_character", "debug_label")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -50, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -28.9099, -113.365, 40.6461)
 extra_cull_margin = 16384.0
 gi_mode = 2
 gi_lightmap_scale = 2
