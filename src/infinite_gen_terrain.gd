@@ -9,25 +9,10 @@ class_name InfiniteGenTerrain
 enum TileState {
   PENDING,      # Queued for generation
   GENERATING,   # Currently being generated in background thread
-  FADING_IN,    # Generated, transitioning to full visibility
-  ACTIVE,       # Fully visible and stable
-  FADING_OUT,   # Player moving away, transitioning to invisible
-  UNLOADED      # Removed from memory
+  LOADED        # In memory, ready to render
 }
 
 # Configuration
-@export_group("Distance Settings")
-@export var generation_distance: float = 1280.0:  ## Distance at which to start generating tiles (4-5 tiles)
-  set(value):
-    generation_distance = value
-    if is_inside_tree():
-      _update_terrain()
-@export var unload_distance: float = 2048.0:  ## Distance at which to unload tiles (~8 tiles)
-  set(value):
-    unload_distance = value
-    if is_inside_tree():
-      _cleanup_distant_tiles()
-
 @export_group("Fade Settings")
 @export var fade_in_duration: float = 1.5  ## Duration of fade-in animation in seconds
 @export var fade_out_duration: float = 1.0  ## Duration of fade-out animation in seconds
@@ -69,6 +54,7 @@ var queue_semaphore: Semaphore
 var generation_thread: Thread
 var thread_should_exit: bool = false
 var currently_generating: int = 0
+var cached_player_tile: Vector2i = Vector2i(0, 0)  # Thread-safe cache of player tile position
 
 # Shared erosion generator (reused to avoid creating multiple RenderingDevices)
 var erosion_generator: ErosionGeneratorTiled
@@ -80,10 +66,11 @@ class TerrainTile:
   var position: Vector2i
   var heightmap: ImageTexture
   var state: TileState
-  var fade_progress: float = 0.0  # 0.0 to 1.0
-  var fade_start_time: float = 0.0
   var distance_to_player: float = INF
-  var opacity_multiplier: float = 0.0
+  var is_rendering: bool = false  # Whether this tile is currently in the 4-tile shader
+  var fade_progress: float = 0.0  # 0.0 to 1.0 for shader fade
+  var fade_start_time: float = 0.0
+  var opacity_multiplier: float = 1.0
   var vertical_offset: float = 0.0
 
   func _init(pos: Vector2i):
@@ -193,7 +180,7 @@ func _update_mesh_position():
   global_position = target_pos
 
 func _update_terrain():
-  """Update tiles based on player position"""
+  """Maintain 9-tile window (player's tile + 8 neighbors)"""
   if not player_character:
     return
 
@@ -203,23 +190,13 @@ func _update_terrain():
     floor(player_pos.z / tile_size)
   )
 
-  # Calculate generation radius in tiles
-  var gen_radius = int(ceil(generation_distance / tile_size))
+  # Update cached player tile for worker thread (atomic write, safe without mutex)
+  cached_player_tile = player_tile
 
-  # Check all tiles within generation distance
-  for ty in range(player_tile.y - gen_radius, player_tile.y + gen_radius + 1):
-    for tx in range(player_tile.x - gen_radius, player_tile.x + gen_radius + 1):
+  # Generate 3x3 grid around player
+  for ty in range(player_tile.y - 1, player_tile.y + 2):
+    for tx in range(player_tile.x - 1, player_tile.x + 2):
       var tile_pos = Vector2i(tx, ty)
-      var tile_center = Vector3(
-        tx * tile_size + tile_size * 0.5,
-        0,
-        ty * tile_size + tile_size * 0.5
-      )
-      var distance = player_pos.distance_to(tile_center)
-
-      # Skip if too far
-      if distance > generation_distance:
-        continue
 
       # Create tile if doesn't exist
       if not tiles.has(tile_pos):
@@ -265,7 +242,35 @@ func _worker_thread_loop():
       queue_mutex.unlock()
       continue
 
-    # Get next tile to generate
+    # Sort queue by distance to player (closest first) and remove tiles outside 9-tile window
+    # Use cached player tile (thread-safe, updated by main thread)
+    var player_tile = cached_player_tile
+
+    # Remove queued tiles outside 9-tile window
+    var i = 0
+    while i < generation_queue.size():
+      var queued_tile_pos = generation_queue[i]
+      # Check if tile is in 3x3 grid around player
+      if abs(queued_tile_pos.x - player_tile.x) > 1 or abs(queued_tile_pos.y - player_tile.y) > 1:
+        generation_queue.remove_at(i)
+        generation_queue_set.erase(queued_tile_pos)
+        print("Worker thread: Removed ", queued_tile_pos, " from queue (outside 9-tile window)")
+      else:
+        i += 1
+
+    # Sort remaining queue by distance to player tile (Manhattan distance for simplicity)
+    generation_queue.sort_custom(func(a, b):
+      var dist_a = abs(a.x - player_tile.x) + abs(a.y - player_tile.y)
+      var dist_b = abs(b.x - player_tile.x) + abs(b.y - player_tile.y)
+      return dist_a < dist_b
+    )
+
+    # Check again after cleanup
+    if generation_queue.is_empty():
+      queue_mutex.unlock()
+      continue
+
+    # Get next tile to generate (closest to player)
     var tile_pos = generation_queue.pop_front()
     generation_queue_set.erase(tile_pos)
     currently_generating += 1
@@ -303,85 +308,52 @@ func _on_tile_generated(tile_pos: Vector2i, heightmap: ImageTexture):
 
   var tile = tiles[tile_pos]
   tile.heightmap = heightmap
-  tile.state = TileState.FADING_IN
-  tile.fade_start_time = Time.get_ticks_msec() / 1000.0
-  tile.fade_progress = 0.0
+  tile.state = TileState.LOADED
 
-  # Set initial fade values
-  if enable_opacity_fade:
-    tile.opacity_multiplier = 0.0
-  else:
-    tile.opacity_multiplier = 1.0
-
-  if enable_vertical_morph:
-    tile.vertical_offset = -vertical_morph_distance
-  else:
-    tile.vertical_offset = 0.0
-
-  print("InfiniteGenTerrain: Tile ", tile_pos, " generated, starting fade-in (opacity: ", tile.opacity_multiplier, ", offset: ", tile.vertical_offset, ")")
+  print("InfiniteGenTerrain: Tile ", tile_pos, " loaded and ready to render")
 
 func _update_tile_fades(delta: float):
-  """Update fade animations for all tiles"""
+  """Update fade animations for tiles entering/leaving shader"""
   var current_time = Time.get_ticks_msec() / 1000.0
 
   for tile_pos in tiles.keys():
     var tile: TerrainTile = tiles[tile_pos]
 
-    if tile.state == TileState.FADING_IN:
-      var elapsed = current_time - tile.fade_start_time
-      tile.fade_progress = clamp(elapsed / fade_in_duration, 0.0, 1.0)
+    # Only fade tiles that are rendering
+    if not tile.is_rendering:
+      continue
 
-      # Update fade values
-      if enable_opacity_fade:
-        tile.opacity_multiplier = smoothstep(0.0, 1.0, tile.fade_progress)
-      else:
-        tile.opacity_multiplier = 1.0
+    # Update fade progress
+    var elapsed = current_time - tile.fade_start_time
+    var duration = fade_in_duration if tile.fade_progress < 1.0 else fade_out_duration
+    tile.fade_progress = clamp(elapsed / duration, 0.0, 1.0)
 
-      if enable_vertical_morph:
-        tile.vertical_offset = lerp(-vertical_morph_distance, 0.0, smoothstep(0.0, 1.0, tile.fade_progress))
-      else:
-        tile.vertical_offset = 0.0
+    # Update fade values based on progress
+    if enable_opacity_fade:
+      tile.opacity_multiplier = smoothstep(0.0, 1.0, tile.fade_progress)
+    else:
+      tile.opacity_multiplier = 1.0
 
-      # Check if fade complete
-      if tile.fade_progress >= 1.0:
-        tile.state = TileState.ACTIVE
-        tile.opacity_multiplier = 1.0
-        tile.vertical_offset = 0.0
-
-    elif tile.state == TileState.FADING_OUT:
-      var elapsed = current_time - tile.fade_start_time
-      tile.fade_progress = clamp(elapsed / fade_out_duration, 0.0, 1.0)
-
-      # Update fade values (reverse of fade in)
-      if enable_opacity_fade:
-        tile.opacity_multiplier = smoothstep(1.0, 0.0, tile.fade_progress)
-      else:
-        tile.opacity_multiplier = 1.0
-
-      if enable_vertical_morph:
-        tile.vertical_offset = lerp(0.0, -vertical_morph_distance, smoothstep(0.0, 1.0, tile.fade_progress))
-      else:
-        tile.vertical_offset = 0.0
-
-      # Check if fade complete
-      if tile.fade_progress >= 1.0:
-        tile.state = TileState.UNLOADED
-        tiles.erase(tile_pos)
+    if enable_vertical_morph:
+      tile.vertical_offset = lerp(-vertical_morph_distance, 0.0, smoothstep(0.0, 1.0, tile.fade_progress))
+    else:
+      tile.vertical_offset = 0.0
 
 func _update_active_tiles():
-  """Update shader uniforms with 4 closest active tiles"""
+  """Update shader uniforms with 4 closest tiles, managing fade in/out"""
   if not player_character:
     return
 
   var player_pos = player_character.global_position
+  var current_time = Time.get_ticks_msec() / 1000.0
 
-  # Update distances and collect active tiles
-  var active_tiles: Array[TerrainTile] = []
+  # Update distances and collect all tiles with heightmaps
+  var loaded_tiles: Array[TerrainTile] = []
   for tile_pos in tiles.keys():
     var tile: TerrainTile = tiles[tile_pos]
 
-    # Only consider tiles that have heightmaps
-    if tile.heightmap == null:
+    # Only consider tiles that have heightmaps loaded
+    if tile.heightmap == null or tile.state != TileState.LOADED:
       continue
 
     # Calculate distance
@@ -391,75 +363,77 @@ func _update_active_tiles():
       tile_pos.y * tile_size + tile_size * 0.5
     )
     tile.distance_to_player = player_pos.distance_to(tile_center)
-
-    # Add to active list if in valid state
-    if tile.state in [TileState.FADING_IN, TileState.ACTIVE, TileState.FADING_OUT]:
-      active_tiles.append(tile)
+    loaded_tiles.append(tile)
 
   # Sort by distance
-  active_tiles.sort_custom(func(a, b): return a.distance_to_player < b.distance_to_player)
+  loaded_tiles.sort_custom(func(a, b): return a.distance_to_player < b.distance_to_player)
 
-  # Take closest 4
-  var num_active = min(4, active_tiles.size())
+  # Determine which 4 tiles should be rendering
+  var num_to_render = min(4, loaded_tiles.size())
+  var rendering_tiles = loaded_tiles.slice(0, num_to_render)
 
-  # Debug output (only print when active count changes)
-  if num_active != last_active_count:
-    print("InfiniteGenTerrain: Active tiles updated: ", num_active)
-    last_active_count = num_active
+  # Update rendering flags and start fades for tiles entering/leaving shader
+  var rendering_set = {}
+  for tile in rendering_tiles:
+    rendering_set[tile.position] = true
+    if not tile.is_rendering:
+      # Tile just entered shader - start fade in
+      tile.is_rendering = true
+      tile.fade_start_time = current_time
+      tile.fade_progress = 0.0
+      print("InfiniteGenTerrain: Tile ", tile.position, " entering shader (fade in)")
+
+  # Mark tiles that left the shader
+  for tile_pos in tiles.keys():
+    var tile = tiles[tile_pos]
+    if tile.is_rendering and not rendering_set.has(tile.position):
+      tile.is_rendering = false
+      print("InfiniteGenTerrain: Tile ", tile.position, " left shader")
+
+  # Store for debug display
+  active_tile_slots = rendering_tiles
 
   # Update shader uniforms
   for i in range(4):
-    if i < num_active:
-      var tile = active_tiles[i]
+    if i < num_to_render:
+      var tile = rendering_tiles[i]
       terrain_material.set_shader_parameter("heightmap_" + str(i), tile.heightmap)
-      # Pass tile coordinates (not world coordinates)
-      # Shader will multiply by (tile_size - blend_border*2) to get world offset
       terrain_material.set_shader_parameter("tile_position_" + str(i),
         Vector2(tile.position.x, tile.position.y))
       terrain_material.set_shader_parameter("tile_opacity_" + str(i), tile.opacity_multiplier)
       terrain_material.set_shader_parameter("tile_vertical_offset_" + str(i), tile.vertical_offset)
-
-      # Debug first tile
-      if i == 0:
-        print("  Tile 0: pos=", tile.position, " opacity=", tile.opacity_multiplier, " offset=", tile.vertical_offset, " state=", tile.state)
     else:
       # Clear unused slots
       terrain_material.set_shader_parameter("tile_opacity_" + str(i), 0.0)
 
-  terrain_material.set_shader_parameter("active_tiles", num_active)
+  terrain_material.set_shader_parameter("active_tiles", num_to_render)
 
 func _cleanup_distant_tiles():
-  """Remove tiles that are too far from player"""
+  """Remove tiles outside 9-tile window"""
   if not player_character:
     return
 
   var player_pos = player_character.global_position
+  var player_tile = Vector2i(
+    floor(player_pos.x / tile_size),
+    floor(player_pos.z / tile_size)
+  )
+
   var tiles_to_remove: Array[Vector2i] = []
 
   for tile_pos in tiles.keys():
-    var tile: TerrainTile = tiles[tile_pos]
+    # Check if tile is outside 3x3 grid around player
+    if abs(tile_pos.x - player_tile.x) > 1 or abs(tile_pos.y - player_tile.y) > 1:
+      tiles_to_remove.append(tile_pos)
 
-    var tile_center = Vector3(
-      tile_pos.x * tile_size + tile_size * 0.5,
-      0,
-      tile_pos.y * tile_size + tile_size * 0.5
-    )
-    var distance = player_pos.distance_to(tile_center)
-
-    # Start fading out if beyond generation distance but not yet fading
-    if distance > generation_distance and tile.state == TileState.ACTIVE:
-      tile.state = TileState.FADING_OUT
-      tile.fade_start_time = Time.get_ticks_msec() / 1000.0
-      tile.fade_progress = 0.0
-
-    # Immediately unload if way too far (beyond unload distance)
-    if distance > unload_distance:
-      if tile.state != TileState.UNLOADED:
-        tiles_to_remove.append(tile_pos)
-
-  # Remove distant tiles
+  # Remove distant tiles and free memory
   for tile_pos in tiles_to_remove:
+    var tile: TerrainTile = tiles[tile_pos]
+    # Free heightmap texture to release GPU memory
+    if tile.heightmap:
+      tile.heightmap = null
     tiles.erase(tile_pos)
+    print("InfiniteGenTerrain: Unloaded tile ", tile_pos, " (outside 9-tile window)")
 
 func _update_debug_display():
   """Update debug HUD with terrain system information"""
@@ -478,9 +452,8 @@ func _update_debug_display():
   # Count tiles by state
   var pending_count = 0
   var generating_count = 0
-  var fading_in_count = 0
-  var active_count = 0
-  var fading_out_count = 0
+  var loaded_count = 0
+  var rendering_count = 0
 
   var loaded_tiles: Array[Vector2i] = []
   for tile_pos in tiles.keys():
@@ -491,12 +464,19 @@ func _update_debug_display():
         pending_count += 1
       TileState.GENERATING:
         generating_count += 1
-      TileState.FADING_IN:
-        fading_in_count += 1
-      TileState.ACTIVE:
-        active_count += 1
-      TileState.FADING_OUT:
-        fading_out_count += 1
+      TileState.LOADED:
+        loaded_count += 1
+    if tile.is_rendering:
+      rendering_count += 1
+
+  # Get currently rendering tiles (from active_tile_slots)
+  var rendering_tiles: Array[String] = []
+  for i in range(min(4, active_tile_slots.size())):
+    var tile = active_tile_slots[i]
+    var dist = tile.distance_to_player
+    rendering_tiles.append("  [%d] (%d, %d) - dist: %.0f, opacity: %.2f" % [
+      i, tile.position.x, tile.position.y, dist, tile.opacity_multiplier
+    ])
 
   # Get queue info
   queue_mutex.lock()
@@ -504,23 +484,41 @@ func _update_debug_display():
   var next_tiles = generation_queue.slice(0, min(5, queue_size))
   queue_mutex.unlock()
 
+  # Get memory info
+  var memory_static = OS.get_static_memory_usage() / 1024.0 / 1024.0  # MB
+  var memory_peak = OS.get_static_memory_peak_usage() / 1024.0 / 1024.0  # MB
+
   # Build debug text
   var debug_text = ""
   debug_text += "=== TERRAIN DEBUG ===\n"
+  debug_text += "Memory: %.1f MB (peak: %.1f MB)\n" % [memory_static, memory_peak]
+  debug_text += "\n"
   debug_text += "Player World: (%.1f, %.1f, %.1f)\n" % [player_pos.x, player_pos.y, player_pos.z]
   debug_text += "Player Tile: (%d, %d)\n" % [player_tile.x, player_tile.y]
   debug_text += "\n"
-  debug_text += "Total Tiles: %d\n" % tiles.size()
+  debug_text += "RENDERING NOW (shader slots):\n"
+  if rendering_tiles.size() > 0:
+    for tile_info in rendering_tiles:
+      debug_text += tile_info + "\n"
+  else:
+    debug_text += "  (none)\n"
+  debug_text += "\n"
+  debug_text += "Tiles in Memory: %d (max 9)\n" % tiles.size()
   debug_text += "  Pending: %d\n" % pending_count
   debug_text += "  Generating: %d\n" % generating_count
-  debug_text += "  Fading In: %d\n" % fading_in_count
-  debug_text += "  Active: %d\n" % active_count
-  debug_text += "  Fading Out: %d\n" % fading_out_count
+  debug_text += "  Loaded: %d\n" % loaded_count
+  debug_text += "  Rendering: %d\n" % rendering_count
   debug_text += "\n"
   debug_text += "Queue Size: %d\n" % queue_size
   if next_tiles.size() > 0:
     debug_text += "Next in Queue:\n"
     for tile_pos in next_tiles:
-      debug_text += "  (%d, %d)\n" % [tile_pos.x, tile_pos.y]
+      var tile_center = Vector3(
+        tile_pos.x * tile_size + tile_size * 0.5,
+        0,
+        tile_pos.y * tile_size + tile_size * 0.5
+      )
+      var dist = player_pos.distance_to(tile_center)
+      debug_text += "  (%d, %d) - dist: %.0f\n" % [tile_pos.x, tile_pos.y, dist]
 
   debug_label.text = debug_text
