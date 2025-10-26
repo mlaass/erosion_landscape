@@ -29,7 +29,7 @@ const EXR_DIR = OUTPUT_DIR + "exr/"
 			print("=== Starting Erosion Tiling Test ===")
 			test_erosion_tiling()
 			print("\n=== Erosion Test Complete ===")
-		run_erosion_test = false
+		run_erosion_test = false  # Trigger reload
 
 func test_voronoi_tiling():
 	print("\n--- Testing Voronoi Tiling ---")
@@ -76,8 +76,58 @@ func test_voronoi_tiling():
 
 func test_erosion_tiling():
 	print("\n--- Testing Erosion Tiling ---")
-	print("(Not yet implemented - pending erosion shader updates)")
-	# TODO: Implement after erosion tiling is complete
+
+	# Create output directories
+	_create_output_directories()
+
+	var erosion_gen = ErosionGeneratorTiled.new()
+	erosion_gen.map_size = TILE_SIZE
+	erosion_gen.seed_value = GLOBAL_SEED
+	erosion_gen.padding_pixels = 128
+	erosion_gen.droplets_per_tile = 1000  # Increased from 500
+	erosion_gen.num_iterations = 50000
+	erosion_gen.brush_radius = 3
+	erosion_gen.max_lifetime = 30
+	erosion_gen.sediment_capacity_factor = 8.0  # Increased from 4.0
+	erosion_gen.min_sediment_capacity = 0.01
+	erosion_gen.deposit_speed = 0.6  # Increased from 0.3
+	erosion_gen.erode_speed = 0.6  # Increased from 0.3
+	erosion_gen.evaporate_speed = 0.01
+	erosion_gen.gravity = 10.0
+	erosion_gen.start_speed = 1.0
+	erosion_gen.start_water = 1.0
+	erosion_gen.inertia = 0.3
+	erosion_gen.debug_output = true
+
+	# Generate all tiles in 4x4 grid
+	for ty in range(GRID_SIZE):
+		for tx in range(GRID_SIZE):
+			print("Generating eroded tile (%d, %d)..." % [tx, ty])
+
+			erosion_gen.tile_x = tx
+			erosion_gen.tile_y = ty
+			erosion_gen.generate_heightmap()
+
+			# Save individual tile
+			var tile_filename = "erosion_tile_%d_%d" % [tx, ty]
+			erosion_gen.save_heightmap_png(PNG_DIR + tile_filename + ".png")
+			erosion_gen.save_heightmap_exr(EXR_DIR + tile_filename + ".exr")
+
+	print("\nGenerating composite erosion image...")
+	create_composite_image("erosion", GRID_SIZE, TILE_SIZE)
+
+	print("\nGenerating composite difference image...")
+	create_composite_difference_image(GRID_SIZE, TILE_SIZE)
+
+	print("\n--- Erosion Tiling Test Complete ---")
+	print("Generated %d tiles" % (GRID_SIZE * GRID_SIZE))
+	print("Files saved:")
+	print("  - Individual PNG tiles: %s" % PNG_DIR)
+	print("  - Individual EXR tiles: %s" % EXR_DIR)
+	print("  - Composite PNG: %serosion_composite_4x4.png" % PNG_DIR)
+	print("  - Composite EXR: %serosion_composite_4x4.exr" % EXR_DIR)
+	print("  - Composite Difference: %serosion_difference_composite_4x4.png" % PNG_DIR)
+	print("    (Red = erosion, Green = deposition)")
 
 func _create_output_directories():
 	"""Create output directory structure if it doesn't exist"""
@@ -183,3 +233,53 @@ func verify_seams(composite: Image, tile_size: int, grid_size: int, prefix: Stri
 		print("  ✓ Visually seamless (minor floating point errors)")
 	else:
 		print("  ✗ SEAMS DETECTED - investigation needed")
+
+func create_composite_difference_image(grid_size: int, tile_size: int):
+	"""Create a composite difference image showing erosion vs deposition across all tiles"""
+	var composite_size = grid_size * tile_size
+	var composite_diff = Image.create(composite_size, composite_size, false, Image.FORMAT_RGB8)
+
+	var total_erosion = 0.0
+	var total_deposition = 0.0
+	var max_erosion = 0.0
+	var max_deposition = 0.0
+
+	# Load all tile difference images and composite them
+	for ty in range(grid_size):
+		for tx in range(grid_size):
+			var diff_path = PNG_DIR + "tile_diff_%d_%d.png" % [tx, ty]
+
+			# Load tile difference image
+			var tile_diff = Image.load_from_file(diff_path)
+			if tile_diff == null:
+				printerr("Failed to load tile difference: ", diff_path)
+				continue
+
+			# Copy tile into composite and accumulate statistics
+			for y in range(tile_size):
+				for x in range(tile_size):
+					var px = tx * tile_size + x
+					var py = ty * tile_size + y
+					var color = tile_diff.get_pixel(x, y)
+					composite_diff.set_pixel(px, py, color)
+
+					# Track erosion (red) and deposition (green)
+					if color.r > 0.1:  # Erosion
+						var erosion_amount = color.r
+						total_erosion += erosion_amount
+						max_erosion = max(max_erosion, erosion_amount)
+					if color.g > 0.1:  # Deposition
+						var deposition_amount = color.g
+						total_deposition += deposition_amount
+						max_deposition = max(max_deposition, deposition_amount)
+
+	# Save composite difference image
+	composite_diff.save_png(PNG_DIR + "erosion_difference_composite_%dx%d.png" % [grid_size, grid_size])
+
+	print("Composite difference image saved: erosion_difference_composite_%dx%d.png" % [grid_size, grid_size])
+	print("\nComposite Erosion Statistics:")
+	print("  Total erosion (red): %.3f" % total_erosion)
+	print("  Total deposition (green): %.3f" % total_deposition)
+	print("  Max erosion intensity: %.3f" % max_erosion)
+	print("  Max deposition intensity: %.3f" % max_deposition)
+	print("  Net change: %.3f" % (total_deposition - total_erosion))
