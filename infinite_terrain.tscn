@@ -81,6 +81,7 @@ player_character = NodePath("../PlayerCharacter")
 
 [node name="Terrain2" type="MeshInstance3D" parent="Terrain"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+visible = false
 extra_cull_margin = 100.0
 ignore_occlusion_culling = true
 gi_mode = 2

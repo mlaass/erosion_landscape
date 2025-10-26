@@ -1,4 +1,5 @@
 shader_type spatial;
+render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_schlick_ggx;
 
 uniform sampler2D heightmap_0;
 uniform sampler2D heightmap_1;
@@ -10,19 +11,30 @@ uniform vec2 tile_position_1;
 uniform vec2 tile_position_2;
 uniform vec2 tile_position_3;
 
+// Fade parameters per tile
+uniform float tile_opacity_0 = 1.0;
+uniform float tile_opacity_1 = 1.0;
+uniform float tile_opacity_2 = 1.0;
+uniform float tile_opacity_3 = 1.0;
+
+uniform float tile_vertical_offset_0 = 0.0;
+uniform float tile_vertical_offset_1 = 0.0;
+uniform float tile_vertical_offset_2 = 0.0;
+uniform float tile_vertical_offset_3 = 0.0;
+
 uniform int active_tiles;
 
 uniform float tile_size = 256.0;
 uniform float blend_border = 32.0;
 
-uniform vec3 color: source_color = vec3(1.,1.,1.);
+uniform vec3 color: source_color = vec3(0.82, 0.53, 0.23);
 uniform float amplitude = 30.0;
 uniform float gain = 0.0;
 
 varying float height_value;
 varying vec2 world_pos;
 varying vec3 terrain_normal;
-varying float slope;
+varying float tile_alpha;
 
 float get_height_from_tile(sampler2D heightmap, vec2 tile_pos, vec2 _world_pos) {
     vec2 local_pos = _world_pos - (tile_pos*(tile_size-blend_border*2.0));
@@ -60,7 +72,7 @@ vec3 get_normal_from_tile(sampler2D heightmap, vec2 tile_pos, vec2 _world_pos) {
     float height_dx = (height_r - height_l) / (2.0 * epsilon);
     float height_dz = (height_t - height_b) / (2.0 * epsilon);
 
-    return normalize(vec3(-height_dx, 1.0, -height_dz));
+    return normalize(vec3(-height_dx * amplitude, 1.0, -height_dz * amplitude));
 }
 
 void vertex() {
@@ -71,6 +83,8 @@ void vertex() {
     float final_height = 0.0;
     vec3 final_normal = vec3(0.0, 1.0, 0.0);
     float total_weight = 0.0;
+    float total_opacity = 0.0;
+    float total_vertical_offset = 0.0;
 
     // Sample from active heightmaps
     if (active_tiles > 0) {
@@ -81,58 +95,65 @@ void vertex() {
         final_height += height * weight;
         final_normal += normal * weight;
         total_weight += weight;
+        total_opacity += tile_opacity_0 * weight;
+        total_vertical_offset += tile_vertical_offset_0 * weight;
     }
 
     if (active_tiles > 1) {
-        float weight = get_blend_weight( tile_position_1,world_pos);
+        float weight = get_blend_weight(tile_position_1, world_pos);
         float height = get_height_from_tile(heightmap_1, tile_position_1, world_pos);
         vec3 normal = get_normal_from_tile(heightmap_1, tile_position_1, world_pos);
 
         final_height += height * weight;
         final_normal += normal * weight;
         total_weight += weight;
+        total_opacity += tile_opacity_1 * weight;
+        total_vertical_offset += tile_vertical_offset_1 * weight;
     }
 
     if (active_tiles > 2) {
-        float weight = get_blend_weight( tile_position_2,world_pos);
+        float weight = get_blend_weight(tile_position_2, world_pos);
         float height = get_height_from_tile(heightmap_2, tile_position_2, world_pos);
         vec3 normal = get_normal_from_tile(heightmap_2, tile_position_2, world_pos);
 
         final_height += height * weight;
         final_normal += normal * weight;
         total_weight += weight;
+        total_opacity += tile_opacity_2 * weight;
+        total_vertical_offset += tile_vertical_offset_2 * weight;
     }
 
     if (active_tiles > 3) {
-        float weight = get_blend_weight( tile_position_3,world_pos);
+        float weight = get_blend_weight(tile_position_3, world_pos);
         float height = get_height_from_tile(heightmap_3, tile_position_3, world_pos);
         vec3 normal = get_normal_from_tile(heightmap_3, tile_position_3, world_pos);
 
         final_height += height * weight;
         final_normal += normal * weight;
         total_weight += weight;
+        total_opacity += tile_opacity_3 * weight;
+        total_vertical_offset += tile_vertical_offset_3 * weight;
     }
 
-    // This is the key change - if total_weight is less than 1.0,
-    // it means we're in an edge area without full tile coverage
+    // Normalize by total weight
     height_value = final_height / max(total_weight, 0.25);
     terrain_normal = normalize(final_normal);
-    // height_value = final_height / total_weight;
-    VERTEX.y = gain + height_value * amplitude;
+    tile_alpha = total_opacity / max(total_weight, 0.25);
+    float vertical_offset = total_vertical_offset / max(total_weight, 0.25);
+
+    // Apply height, amplitude, and vertical offset for fade effect
+    VERTEX.y = gain + height_value * amplitude + vertical_offset;
     NORMAL = terrain_normal;
 }
 
 void fragment() {
-    float height = 1.-height_value;
-    //ALBEDO = vec3(height) *c100olor;
-    ALBEDO = vec3(height) *color;
-    METALLIC = 1.-height;
-    //ALBEDO = vec3(
-      //get_blend_weight(tile_position_0, world_pos) +
-      //get_blend_weight(tile_position_3, world_pos),
-      //get_blend_weight(tile_position_1, world_pos),
-      //get_blend_weight(tile_position_2, world_pos) +
-      //get_blend_weight(tile_position_3, world_pos)) ;
-    // Make higher areas smoother (like snow) and lower areas rougher
-    ROUGHNESS = 1.-height;
+    float height = 1.0 - height_value;
+    ALBEDO = vec3(height) * color;
+
+    // No alpha blending - terrain is always fully opaque
+    // Fade effect is handled purely via vertex displacement (vertical_offset)
+
+    // Material properties based on height
+    METALLIC = 1.0 - height;
+    ROUGHNESS = 0.8;
 }
