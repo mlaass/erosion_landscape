@@ -67,11 +67,6 @@ class TerrainTile:
   var heightmap: ImageTexture
   var state: TileState
   var distance_to_player: float = INF
-  var is_rendering: bool = false  # Whether this tile is currently in the 4-tile shader
-  var fade_progress: float = 0.0  # 0.0 to 1.0 for shader fade
-  var fade_start_time: float = 0.0
-  var opacity_multiplier: float = 1.0
-  var vertical_offset: float = 0.0
 
   func _init(pos: Vector2i):
     position = pos
@@ -161,7 +156,6 @@ func _physics_process(delta):
   _update_mesh_position()
 
   _update_terrain()
-  _update_tile_fades(delta)
   _update_active_tiles()
   _cleanup_distant_tiles()
   _update_debug_display()
@@ -180,7 +174,7 @@ func _update_mesh_position():
   global_position = target_pos
 
 func _update_terrain():
-  """Maintain 9-tile window (player's tile + 8 neighbors)"""
+  """Maintain 25-tile window (5x5 grid around player)"""
   if not player_character:
     return
 
@@ -193,9 +187,9 @@ func _update_terrain():
   # Update cached player tile for worker thread (atomic write, safe without mutex)
   cached_player_tile = player_tile
 
-  # Generate 3x3 grid around player
-  for ty in range(player_tile.y - 1, player_tile.y + 2):
-    for tx in range(player_tile.x - 1, player_tile.x + 2):
+  # Generate 5x5 grid around player
+  for ty in range(player_tile.y - 2, player_tile.y + 3):
+    for tx in range(player_tile.x - 2, player_tile.x + 3):
       var tile_pos = Vector2i(tx, ty)
 
       # Create tile if doesn't exist
@@ -242,19 +236,19 @@ func _worker_thread_loop():
       queue_mutex.unlock()
       continue
 
-    # Sort queue by distance to player (closest first) and remove tiles outside 9-tile window
+    # Sort queue by distance to player (closest first) and remove tiles outside 5x5 window
     # Use cached player tile (thread-safe, updated by main thread)
     var player_tile = cached_player_tile
 
-    # Remove queued tiles outside 9-tile window
+    # Remove queued tiles outside 5x5 window
     var i = 0
     while i < generation_queue.size():
       var queued_tile_pos = generation_queue[i]
-      # Check if tile is in 3x3 grid around player
-      if abs(queued_tile_pos.x - player_tile.x) > 1 or abs(queued_tile_pos.y - player_tile.y) > 1:
+      # Check if tile is in 5x5 grid around player
+      if abs(queued_tile_pos.x - player_tile.x) > 2 or abs(queued_tile_pos.y - player_tile.y) > 2:
         generation_queue.remove_at(i)
         generation_queue_set.erase(queued_tile_pos)
-        print("Worker thread: Removed ", queued_tile_pos, " from queue (outside 9-tile window)")
+        print("Worker thread: Removed ", queued_tile_pos, " from queue (outside 5x5 window)")
       else:
         i += 1
 
@@ -312,104 +306,46 @@ func _on_tile_generated(tile_pos: Vector2i, heightmap: ImageTexture):
 
   print("InfiniteGenTerrain: Tile ", tile_pos, " loaded and ready to render")
 
-func _update_tile_fades(delta: float):
-  """Update fade animations for tiles entering/leaving shader"""
-  var current_time = Time.get_ticks_msec() / 1000.0
-
-  for tile_pos in tiles.keys():
-    var tile: TerrainTile = tiles[tile_pos]
-
-    # Only fade tiles that are rendering
-    if not tile.is_rendering:
-      continue
-
-    # Update fade progress
-    var elapsed = current_time - tile.fade_start_time
-    var duration = fade_in_duration if tile.fade_progress < 1.0 else fade_out_duration
-    tile.fade_progress = clamp(elapsed / duration, 0.0, 1.0)
-
-    # Update fade values based on progress
-    if enable_opacity_fade:
-      tile.opacity_multiplier = smoothstep(0.0, 1.0, tile.fade_progress)
-    else:
-      tile.opacity_multiplier = 1.0
-
-    if enable_vertical_morph:
-      tile.vertical_offset = lerp(-vertical_morph_distance, 0.0, smoothstep(0.0, 1.0, tile.fade_progress))
-    else:
-      tile.vertical_offset = 0.0
-
 func _update_active_tiles():
-  """Update shader uniforms with 4 closest tiles, managing fade in/out"""
+  """Update shader uniforms with 3x3 grid (9 tiles) around player"""
   if not player_character:
     return
 
   var player_pos = player_character.global_position
-  var current_time = Time.get_ticks_msec() / 1000.0
+  var player_tile = Vector2i(
+    floor(player_pos.x / tile_size),
+    floor(player_pos.z / tile_size)
+  )
 
-  # Update distances and collect all tiles with heightmaps
-  var loaded_tiles: Array[TerrainTile] = []
-  for tile_pos in tiles.keys():
-    var tile: TerrainTile = tiles[tile_pos]
-
-    # Only consider tiles that have heightmaps loaded
-    if tile.heightmap == null or tile.state != TileState.LOADED:
-      continue
-
-    # Calculate distance
-    var tile_center = Vector3(
-      tile_pos.x * tile_size + tile_size * 0.5,
-      0,
-      tile_pos.y * tile_size + tile_size * 0.5
-    )
-    tile.distance_to_player = player_pos.distance_to(tile_center)
-    loaded_tiles.append(tile)
-
-  # Sort by distance
-  loaded_tiles.sort_custom(func(a, b): return a.distance_to_player < b.distance_to_player)
-
-  # Determine which 4 tiles should be rendering
-  var num_to_render = min(4, loaded_tiles.size())
-  var rendering_tiles = loaded_tiles.slice(0, num_to_render)
-
-  # Update rendering flags and start fades for tiles entering/leaving shader
-  var rendering_set = {}
-  for tile in rendering_tiles:
-    rendering_set[tile.position] = true
-    if not tile.is_rendering:
-      # Tile just entered shader - start fade in
-      tile.is_rendering = true
-      tile.fade_start_time = current_time
-      tile.fade_progress = 0.0
-      print("InfiniteGenTerrain: Tile ", tile.position, " entering shader (fade in)")
-
-  # Mark tiles that left the shader
-  for tile_pos in tiles.keys():
-    var tile = tiles[tile_pos]
-    if tile.is_rendering and not rendering_set.has(tile.position):
-      tile.is_rendering = false
-      print("InfiniteGenTerrain: Tile ", tile.position, " left shader")
+  # Collect tiles in 3x3 grid that are loaded
+  var rendering_tiles: Array[TerrainTile] = []
+  for ty in range(player_tile.y - 1, player_tile.y + 2):
+    for tx in range(player_tile.x - 1, player_tile.x + 2):
+      var tile_pos = Vector2i(tx, ty)
+      if tiles.has(tile_pos):
+        var tile = tiles[tile_pos]
+        if tile.heightmap != null and tile.state == TileState.LOADED:
+          rendering_tiles.append(tile)
 
   # Store for debug display
   active_tile_slots = rendering_tiles
 
-  # Update shader uniforms
-  for i in range(4):
+  # Update shader uniforms (up to 9 tiles)
+  var num_to_render = min(9, rendering_tiles.size())
+  for i in range(9):
     if i < num_to_render:
       var tile = rendering_tiles[i]
       terrain_material.set_shader_parameter("heightmap_" + str(i), tile.heightmap)
       terrain_material.set_shader_parameter("tile_position_" + str(i),
         Vector2(tile.position.x, tile.position.y))
-      terrain_material.set_shader_parameter("tile_opacity_" + str(i), tile.opacity_multiplier)
-      terrain_material.set_shader_parameter("tile_vertical_offset_" + str(i), tile.vertical_offset)
     else:
       # Clear unused slots
-      terrain_material.set_shader_parameter("tile_opacity_" + str(i), 0.0)
+      terrain_material.set_shader_parameter("heightmap_" + str(i), null)
 
   terrain_material.set_shader_parameter("active_tiles", num_to_render)
 
 func _cleanup_distant_tiles():
-  """Remove tiles outside 9-tile window"""
+  """Remove tiles outside 5x5 window"""
   if not player_character:
     return
 
@@ -422,8 +358,8 @@ func _cleanup_distant_tiles():
   var tiles_to_remove: Array[Vector2i] = []
 
   for tile_pos in tiles.keys():
-    # Check if tile is outside 3x3 grid around player
-    if abs(tile_pos.x - player_tile.x) > 1 or abs(tile_pos.y - player_tile.y) > 1:
+    # Check if tile is outside 5x5 grid around player
+    if abs(tile_pos.x - player_tile.x) > 2 or abs(tile_pos.y - player_tile.y) > 2:
       tiles_to_remove.append(tile_pos)
 
   # Remove distant tiles and free memory
@@ -433,7 +369,7 @@ func _cleanup_distant_tiles():
     if tile.heightmap:
       tile.heightmap = null
     tiles.erase(tile_pos)
-    print("InfiniteGenTerrain: Unloaded tile ", tile_pos, " (outside 9-tile window)")
+    print("InfiniteGenTerrain: Unloaded tile ", tile_pos, " (outside 5x5 window)")
 
 func _update_debug_display():
   """Update debug HUD with terrain system information"""
@@ -453,7 +389,6 @@ func _update_debug_display():
   var pending_count = 0
   var generating_count = 0
   var loaded_count = 0
-  var rendering_count = 0
 
   var loaded_tiles: Array[Vector2i] = []
   for tile_pos in tiles.keys():
@@ -466,16 +401,13 @@ func _update_debug_display():
         generating_count += 1
       TileState.LOADED:
         loaded_count += 1
-    if tile.is_rendering:
-      rendering_count += 1
 
   # Get currently rendering tiles (from active_tile_slots)
   var rendering_tiles: Array[String] = []
-  for i in range(min(4, active_tile_slots.size())):
+  for i in range(min(9, active_tile_slots.size())):
     var tile = active_tile_slots[i]
-    var dist = tile.distance_to_player
-    rendering_tiles.append("  [%d] (%d, %d) - dist: %.0f, opacity: %.2f" % [
-      i, tile.position.x, tile.position.y, dist, tile.opacity_multiplier
+    rendering_tiles.append("  [%d] (%d, %d)" % [
+      i, tile.position.x, tile.position.y
     ])
 
   # Get queue info
@@ -503,11 +435,11 @@ func _update_debug_display():
   else:
     debug_text += "  (none)\n"
   debug_text += "\n"
-  debug_text += "Tiles in Memory: %d (max 9)\n" % tiles.size()
+  debug_text += "Tiles in Memory: %d (max 25)\n" % tiles.size()
   debug_text += "  Pending: %d\n" % pending_count
   debug_text += "  Generating: %d\n" % generating_count
   debug_text += "  Loaded: %d\n" % loaded_count
-  debug_text += "  Rendering: %d\n" % rendering_count
+  debug_text += "Rendering (3x3 grid): %d (max 9)\n" % active_tile_slots.size()
   debug_text += "\n"
   debug_text += "Queue Size: %d\n" % queue_size
   if next_tiles.size() > 0:
