@@ -45,7 +45,7 @@ shader_parameter/heightmap_8 = ExtResource("10_hor5n")
 [sub_resource type="PlaneMesh" id="PlaneMesh_terrain"]
 lightmap_size_hint = Vector2i(2048, 2048)
 material = SubResource("ShaderMaterial_terrain")
-size = Vector2(4096, 4096)
+size = Vector2(2048, 2048)
 subdivide_width = 2048
 subdivide_depth = 2048
 
@@ -79,12 +79,13 @@ dof_blur_amount = 0.05
 [node name="InfiniteGenTerrain" type="Node3D"]
 
 [node name="Terrain" type="MeshInstance3D" parent="." node_paths=PackedStringArray("player_character", "debug_label")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -110.688, -131.016, 1861.54)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -110.688, -131.016, 858.651)
 extra_cull_margin = 16384.0
 gi_mode = 2
 gi_lightmap_scale = 2
 mesh = SubResource("PlaneMesh_terrain")
 script = ExtResource("2_script")
+droplets_per_tile = 10000
 max_lifetime = 50
 sediment_capacity_factor = 10.0
 erode_speed = 0.8
@@ -93,14 +94,13 @@ player_character = NodePath("../PlayerCharacter")
 debug_label = NodePath("../DebugUI/DebugLabel")
 
 [node name="PlayerCharacter" parent="." instance=ExtResource("3_player")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 128, 100, 1893.3)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 128, 100, 890.411)
 speed = 50
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.551937, 0.833886, 0, -0.833886, 0.551937, 0, 100, 0)
 light_color = Color(1, 0.95, 0.9, 1)
 light_energy = 1.2
-light_angular_distance = 2.0
 shadow_enabled = true
 directional_shadow_mode = 1
 directional_shadow_split_1 = 0.21
