@@ -11,6 +11,7 @@ var min_height: float = 0.0
 var max_height: float = 1.0
 var ridge_multiplier: float = 0.0
 var amplitude: float = 1.0
+var voronoi_intensity: float = 1.0  # Controls contribution of Voronoi layer (0.0 = none, 1.0 = full)
 var seed_value: int = 0
 enum ScalingType { LINEAR, QUADRATIC, EXPONENTIAL, SIGMOID, INVERSE, POWER, COSINE }
 var scaling_type: ScalingType = ScalingType.POWER
@@ -18,6 +19,41 @@ var scaling_type: ScalingType = ScalingType.POWER
 # NEW: Tile position for seamless tiling
 var tile_x: int = 0
 var tile_y: int = 0
+
+# Layer control flags
+var enable_voronoi: bool = true
+var enable_global_noise: bool = true
+
+# Global Noise Layer - adds large-scale height variation
+var global_noise_intensity: float = 0.3  # Controls contribution of global noise layer (0.0 = none, 1.0 = full)
+var global_noise_frequency: float = 0.015  # ~67 units wavelength = ~26 tiles
+var global_noise_octaves: int = 3
+var global_noise_lacunarity: float = 2.0
+var global_noise_persistence: float = 0.5
+var global_noise_seed: int = 0
+
+# Parameter Morphing - varies Voronoi parameters across world space
+var enable_morphing: bool = true
+var morphing_frequency: float = 0.01  # How fast zones change (~100 unit wavelength)
+var morphing_seed: int = 1000  # Separate from height noise
+
+# Ridge multiplier morphing
+var morph_ridge: bool = true
+var ridge_min: float = 0.0
+var ridge_max: float = 1.0
+
+# Num points morphing
+var morph_num_points: bool = true
+var num_points_min: int = 5
+var num_points_max: int = 20
+
+# Height falloff morphing
+var morph_falloff: bool = true
+var falloff_min: float = 1.0
+var falloff_max: float = 4.0
+
+# Scaling type morphing (advanced, disabled by default)
+var morph_scaling_type: bool = false
 
 func _init():
     initialize_compute()
@@ -65,12 +101,13 @@ func generate_voronoi_heightmap():
       return
 
   # Set parameters - align to 16 bytes (4 floats per block)
+  # MUST stay within 128 bytes (8 blocks) limit!
   var params := PackedFloat32Array([
       # Block 1
       float(map_size),
       float(num_points),
-      float(tile_x),          # NEW: tile position
-      float(tile_y),          # NEW: tile position
+      float(tile_x),
+      float(tile_y),
 
       # Block 2
       height_falloff,
@@ -81,8 +118,38 @@ func generate_voronoi_heightmap():
       # Block 3
       float(scaling_type),
       amplitude,
-      float(seed_value),      # NEW: global seed
-      0.0,  # padding
+      float(seed_value),
+      voronoi_intensity,  # Voronoi layer intensity
+
+      # Block 4: Global noise parameters
+      global_noise_intensity,  # Global noise layer intensity
+      global_noise_frequency,
+      global_noise_lacunarity,
+      global_noise_persistence,
+
+      # Block 5: Global noise + morphing seeds
+      float(global_noise_octaves),
+      float(global_noise_seed),
+      morphing_frequency,
+      float(morphing_seed),
+
+      # Block 6: Morphing ranges - ridge & num_points
+      ridge_min,
+      ridge_max,
+      float(num_points_min),
+      float(num_points_max),
+
+      # Block 7: Morphing ranges - falloff + layer enable flags
+      falloff_min,
+      falloff_max,
+      1.0 if enable_voronoi else 0.0,
+      1.0 if enable_global_noise else 0.0,
+
+      # Block 8: Morphing enable flags
+      1.0 if enable_morphing else 0.0,
+      1.0 if morph_ridge else 0.0,
+      1.0 if morph_num_points else 0.0,
+      1.0 if morph_falloff else 0.0,
   ])
 
   # Dispatch compute shader

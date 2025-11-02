@@ -79,22 +79,28 @@ dof_blur_amount = 0.05
 [node name="InfiniteGenTerrain" type="Node3D"]
 
 [node name="Terrain" type="MeshInstance3D" parent="." node_paths=PackedStringArray("player_character", "debug_label")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -110.688, -131.016, 858.651)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -110.688, -131.016, 578.994)
 extra_cull_margin = 16384.0
 gi_mode = 2
 gi_lightmap_scale = 2
 mesh = SubResource("PlaneMesh_terrain")
 script = ExtResource("2_script")
-droplets_per_tile = 10000
-max_lifetime = 50
+global_noise_intensity = 5.0
+global_noise_frequency = 0.002
+voronoi_height_falloff = 0.5
+enable_erosion = false
+erosion_intensity = 12.0
+droplets_per_tile = 3000
 sediment_capacity_factor = 10.0
-erode_speed = 0.8
+erode_speed = 1.0
 deposit_speed = 0.8
+gravity = 50.0
+inertia = 0.5
 player_character = NodePath("../PlayerCharacter")
 debug_label = NodePath("../DebugUI/DebugLabel")
 
 [node name="PlayerCharacter" parent="." instance=ExtResource("3_player")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 128, 100, 890.411)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 128, 100, 610.754)
 speed = 50
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]

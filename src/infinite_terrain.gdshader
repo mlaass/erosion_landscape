@@ -161,7 +161,7 @@ void fragment() {
     } else {
         // Normal rendering
         float height = 1.0 - height_value;
-        final_color = vec3(height) * color;
+        final_color =  color;
         // METALLIC = 1.0 - height;
     }
 

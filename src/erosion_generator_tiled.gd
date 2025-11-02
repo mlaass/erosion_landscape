@@ -28,6 +28,10 @@ var tile_y: int = 0
 var padding_pixels: int = 128
 var droplets_per_tile: int = 500  # Droplets spawned per tile
 
+# Erosion layer control
+var enable_erosion: bool = true  # Toggle erosion on/off
+var erosion_intensity: float = 1.0  # 0.0 = no erosion, 1.0 = full erosion (opacity blend)
+
 func _init():
   initialize_compute()
 
@@ -51,6 +55,46 @@ func initialize_compute() -> void:
   voronoi_generator.amplitude = 1.0
   voronoi_generator.scaling_type = VoronoiGenerator.ScalingType.POWER
   voronoi_generator.debug_output = false
+
+  # === LAYER CONTROL ===
+  # Toggle these to test individual layers:
+  # - enable_voronoi: false, enable_global_noise: true  → Test noise alone
+  # - enable_voronoi: true,  enable_global_noise: false → Test Voronoi alone
+  # - enable_voronoi: true,  enable_global_noise: true  → Both layers blended
+
+  voronoi_generator.enable_voronoi = true
+  voronoi_generator.enable_global_noise = true
+
+  # Global noise layer - creates large-scale mountain ranges
+  voronoi_generator.global_noise_intensity = 0.3  # Intensity of global noise layer
+  voronoi_generator.global_noise_frequency = 0.015  # ~26 tile wavelength for mountain ranges
+  voronoi_generator.global_noise_octaves = 2  # Reduced from 3 for performance
+  voronoi_generator.global_noise_lacunarity = 2.0
+  voronoi_generator.global_noise_persistence = 0.5
+  voronoi_generator.global_noise_seed = 0
+
+  # Parameter morphing - DISABLED (too expensive for per-pixel computation)
+  voronoi_generator.enable_morphing = false
+  voronoi_generator.morphing_frequency = 0.01  # ~50 tile wavelength for zone changes
+  voronoi_generator.morphing_seed = 1000
+
+  # Ridge morphing: smooth plains → sharp ridges
+  voronoi_generator.morph_ridge = false
+  voronoi_generator.ridge_min = 0.0
+  voronoi_generator.ridge_max = 0.8  # Maximum 0.8 to avoid extreme spikes
+
+  # Num points morphing: disabled (can't vary point count per pixel in shader)
+  voronoi_generator.morph_num_points = false
+  voronoi_generator.num_points_min = 5
+  voronoi_generator.num_points_max = 15
+
+  # Falloff morphing: gentle slopes → steep cliffs
+  voronoi_generator.morph_falloff = false
+  voronoi_generator.falloff_min = 1.0
+  voronoi_generator.falloff_max = 4.0
+
+  # Scaling type morphing (disabled for now - can be complex)
+  voronoi_generator.morph_scaling_type = false
 
 func generate_heightmap() -> void:
   generate_erosion_heightmap_tiled()
@@ -109,6 +153,30 @@ func generate_erosion_heightmap_tiled():
     extended_heightmap.save_png("res://output/png/extended_voronoi_tile_%d_%d.png" % [tile_x, tile_y])
     extended_heightmap.save_exr("res://output/exr/extended_voronoi_tile_%d_%d.exr" % [tile_x, tile_y])
     print("Saved extended Voronoi heightmap to output directory")
+
+  # Early exit if erosion is disabled
+  if not enable_erosion:
+    if debug_output:
+      print("Erosion disabled - skipping erosion simulation")
+    # Skip directly to extracting center region
+    heightmap_image = Image.create(tile_size, tile_size, false, Image.FORMAT_RF)
+    for y in range(tile_size):
+      for x in range(tile_size):
+        var src_x = x + padding_pixels
+        var src_y = y + padding_pixels
+        var height = extended_heightmap.get_pixel(src_x, src_y).r
+        heightmap_image.set_pixel(x, y, Color(height, 0, 0, 0))
+    heightmap_image.generate_mipmaps()
+    heightmap_texture = ImageTexture.create_from_image(heightmap_image)
+    return
+
+  # Store pre-erosion heightmap for opacity blending
+  var pre_erosion_data = PackedFloat32Array()
+  if erosion_intensity < 1.0:
+    pre_erosion_data.resize(extended_size * extended_size)
+    for y in range(extended_size):
+      for x in range(extended_size):
+        pre_erosion_data[y * extended_size + x] = extended_heightmap.get_pixel(x, y).r
 
   # Step 2: Calculate affected droplets
   var droplets = calculate_affected_droplets(tile_x, tile_y, tile_size, padding_pixels)
@@ -201,6 +269,14 @@ func generate_erosion_heightmap_tiled():
   # Step 6: Get results
   var output_bytes = rd.buffer_get_data(heightmap_buffer)
   map_data = output_bytes.to_float32_array()
+
+  # Apply erosion intensity (opacity blend between pre-erosion and post-erosion)
+  if erosion_intensity < 1.0 and pre_erosion_data.size() > 0:
+    if debug_output:
+      print("Blending erosion with intensity: %.2f" % erosion_intensity)
+    for i in range(map_data.size()):
+      # mix(pre, post, intensity): lerp between pre-erosion and post-erosion
+      map_data[i] = lerp(pre_erosion_data[i], map_data[i], erosion_intensity)
 
   # Cleanup
   rd.free_rid(heightmap_buffer)

@@ -25,16 +25,34 @@ enum TileState {
 @export var global_seed: int = 12345  ## Seed for terrain generation
 @export var tile_size: int = 256  ## Size of each terrain tile in pixels
 
-@export_group("Erosion Parameters")
-@export var padding_pixels: int = 128
-@export var droplets_per_tile: int = 1000
-@export var max_lifetime: int = 30
-@export var sediment_capacity_factor: float = 8.0
-@export var erode_speed: float = 0.6
-@export var deposit_speed: float = 0.6
-@export var evaporate_speed: float = 0.01
-@export var gravity: float = 10.0
-@export var inertia: float = 0.3
+@export_group("Global Noise Layer")
+@export var enable_global_noise: bool = true  ## Enable/disable global noise layer
+@export var global_noise_intensity: float = 0.3  ## Intensity/opacity (0.0 = none, 1.0 = full)
+@export var global_noise_frequency: float = 0.015  ## Frequency (~26 tile wavelength)
+@export var global_noise_octaves: int = 2  ## Number of octaves for detail
+@export var global_noise_lacunarity: float = 2.0  ## Frequency multiplier per octave
+@export var global_noise_persistence: float = 0.5  ## Amplitude multiplier per octave
+@export var global_noise_seed: int = 0  ## Seed for global noise
+
+@export_group("Voronoi Layer")
+@export var enable_voronoi: bool = true  ## Enable/disable Voronoi cell layer
+@export var voronoi_intensity: float = 1.0  ## Intensity/opacity (0.0 = none, 1.0 = full)
+@export var voronoi_num_points: int = 8  ## Number of Voronoi points per tile
+@export var voronoi_height_falloff: float = 2.0  ## Height falloff exponent
+@export var voronoi_ridge_multiplier: float = 0.0  ## Ridge effect strength
+
+@export_group("Erosion Layer")
+@export var enable_erosion: bool = true  ## Enable/disable erosion simulation
+@export var erosion_intensity: float = 1.0  ## Intensity/opacity (0.0 = none, 1.0 = full erosion)
+@export var padding_pixels: int = 128  ## Padding pixels for seamless erosion
+@export var droplets_per_tile: int = 1000  ## Number of droplets to simulate
+@export var max_lifetime: int = 30  ## Maximum droplet lifetime
+@export var sediment_capacity_factor: float = 8.0  ## Sediment capacity multiplier
+@export var erode_speed: float = 0.6  ## Erosion speed
+@export var deposit_speed: float = 0.6  ## Sediment deposition speed
+@export var evaporate_speed: float = 0.01  ## Water evaporation speed
+@export var gravity: float = 10.0  ## Gravity strength
+@export var inertia: float = 0.3  ## Droplet momentum/inertia
 
 @export_group("References")
 @export var player_character: Node3D  ## Player to track for tile generation
@@ -107,6 +125,32 @@ func _ready():
   erosion_generator.map_size = tile_size
   erosion_generator.seed_value = global_seed
   erosion_generator.padding_pixels = padding_pixels
+  erosion_generator.brush_radius = 3
+  erosion_generator.debug_output = false
+
+  # === GLOBAL NOISE LAYER ===
+  erosion_generator.voronoi_generator.enable_global_noise = enable_global_noise
+  erosion_generator.voronoi_generator.global_noise_intensity = global_noise_intensity
+  erosion_generator.voronoi_generator.global_noise_frequency = global_noise_frequency
+  erosion_generator.voronoi_generator.global_noise_octaves = global_noise_octaves
+  erosion_generator.voronoi_generator.global_noise_lacunarity = global_noise_lacunarity
+  erosion_generator.voronoi_generator.global_noise_persistence = global_noise_persistence
+  erosion_generator.voronoi_generator.global_noise_seed = global_noise_seed
+
+  # === VORONOI LAYER ===
+  erosion_generator.voronoi_generator.enable_voronoi = enable_voronoi
+  erosion_generator.voronoi_generator.voronoi_intensity = voronoi_intensity
+  erosion_generator.voronoi_generator.num_points = voronoi_num_points
+  erosion_generator.voronoi_generator.height_falloff = voronoi_height_falloff
+  erosion_generator.voronoi_generator.ridge_multiplier = voronoi_ridge_multiplier
+  erosion_generator.voronoi_generator.min_height = 0.0
+  erosion_generator.voronoi_generator.max_height = 1.0
+  erosion_generator.voronoi_generator.amplitude = 1.0
+  erosion_generator.voronoi_generator.scaling_type = VoronoiGenerator.ScalingType.POWER
+
+  # === EROSION LAYER ===
+  erosion_generator.enable_erosion = enable_erosion
+  erosion_generator.erosion_intensity = erosion_intensity
   erosion_generator.droplets_per_tile = droplets_per_tile
   erosion_generator.max_lifetime = max_lifetime
   erosion_generator.sediment_capacity_factor = sediment_capacity_factor
@@ -118,9 +162,8 @@ func _ready():
   erosion_generator.start_speed = 1.0
   erosion_generator.start_water = 1.0
   erosion_generator.inertia = inertia
-  erosion_generator.brush_radius = 3
-  erosion_generator.debug_output = false
-  print("InfiniteGenTerrain: Shared erosion generator created")
+
+  print("InfiniteGenTerrain: Shared erosion generator created with 3 layers")
 
   # Connect signal
   tile_generated.connect(_on_tile_generated)
