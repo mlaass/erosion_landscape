@@ -203,9 +203,9 @@ void main() {
 
         if (erode_index >= 0 && erode_index < int(params.map_size * params.map_size)) {
           float weighted_erode_amount = amount_to_erode * brush_weights.brush_weights[i];
-          float delta_sediment = min(height_map.heightmap[erode_index], weighted_erode_amount);
-          height_map.heightmap[erode_index] -= delta_sediment;
-          sediment += delta_sediment;
+          // No clamping - allow erosion to create negative heights (underwater/valleys)
+          height_map.heightmap[erode_index] -= weighted_erode_amount;
+          sediment += weighted_erode_amount;
         }
       }
     }

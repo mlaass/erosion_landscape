@@ -127,3 +127,4 @@ Defined in `project.godot`:
 - ESC: Toggle mouse capture
 - Mouse: Look around (when captured)
 - never add attribution to commits
+- no attribution ever in commits
