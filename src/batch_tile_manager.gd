@@ -62,11 +62,14 @@ func precompute_batch(region: Rect2i, cache_manager = null) -> void:
       from_cache = true
     # Check cache manager if provided
     elif cache_manager and cache_manager.has_tile(tile_pos):
-      tile_data = cache_manager.load_tile(tile_pos)
-      from_cache = true
-      precomputed_tiles[tile_pos] = tile_data
-    else:
-      # Generate new tile
+      var cached_image = cache_manager.load_tile(tile_pos)
+      if cached_image:
+        tile_data = BatchTileData.new(tile_pos, cached_image)
+        from_cache = true
+        precomputed_tiles[tile_pos] = tile_data
+
+    # Generate new tile if not in memory or cache
+    if not tile_data:
       erosion_generator.tile_x = tile_pos.x
       erosion_generator.tile_y = tile_pos.y
       erosion_generator.generate_heightmap()

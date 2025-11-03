@@ -61,6 +61,10 @@ class_name InfiniteGenTerrain
 @export var edge_threshold: int = 0  ## Distance in tiles from boundary to trigger next batch (0 = only when leaving batch)
 @export var max_cached_batches: int = 4  ## Maximum number of batches to keep in memory
 
+@export_group("Disk Cache")
+@export var enable_disk_cache: bool = true  ## Enable persistent disk caching of tiles (organized by seed)
+@export var show_cache_stats: bool = false  ## Show cache statistics in debug display
+
 @export_group("References")
 @export var player_character: Node3D  ## Player to track for tile generation
 @export var debug_label: Label  ## Optional debug display label
@@ -73,6 +77,7 @@ var current_shader_tiles: Array[Vector2i] = []  # Track which tiles are currentl
 var batch_manager: BatchTileManager
 var loading_overlay: LoadingOverlay
 var erosion_generator: ErosionGeneratorTiled
+var cache_manager: TileCacheManager
 
 func _ready():
   if Engine.is_editor_hint():
@@ -159,6 +164,15 @@ func _ready():
   var mode_str = "texture mode" if erosion_generator.use_texture_erosion else "brush mode"
   print("InfiniteGenTerrain: Shared erosion generator created with 3 layers (erosion: %s)" % mode_str)
 
+  # Create disk cache manager
+  if enable_disk_cache:
+    cache_manager = TileCacheManager.new(global_seed)
+    cache_manager.cache_enabled = true
+    var cache_stats = cache_manager.get_cache_stats()
+    print("InfiniteGenTerrain: Disk cache enabled for seed %d (%d cached tiles, %.2f MB)" % [global_seed, cache_stats["total_tiles"], cache_stats["total_size_mb"]])
+  else:
+    print("InfiniteGenTerrain: Disk cache disabled")
+
   # Create batch manager
   batch_manager = BatchTileManager.new(erosion_generator)
   batch_manager.batch_size = batch_size
@@ -186,7 +200,7 @@ func _ready():
     batch_size
   )
   print("InfiniteGenTerrain: Starting initial batch generation for region ", initial_region)
-  batch_manager.precompute_batch(initial_region, null)  # No cache manager for now
+  batch_manager.precompute_batch(initial_region, cache_manager)
 
 func _exit_tree():
   if Engine.is_editor_hint():
@@ -224,7 +238,7 @@ func _physics_process(delta):
       print("InfiniteGenTerrain: Player near boundary at ", player_tile, " - generating next batch ", next_region)
       if player_character.has_method("set"):
         player_character.paused = true  # Pause player movement
-      batch_manager.precompute_batch(next_region, null)
+      batch_manager.precompute_batch(next_region, cache_manager)
 
   _update_debug_display()
 
