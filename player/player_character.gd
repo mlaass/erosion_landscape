@@ -5,12 +5,17 @@ extends CharacterBody3D
 var look_sensitivity = 0.01
 var gravity =0
 var velocity_y = 0
+var paused: bool = false  # Set to true to disable movement (e.g., during batch generation)
 @onready var camera:Camera3D = $Camera3d
 
 func _ready() -> void:
   Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-  
+
 func _physics_process(delta):
+  # Skip movement when paused
+  if paused:
+    return
+
   if gravity_enabled:
     var horizontal_velocity = Input.get_vector("move_left","move_right","move_forward","move_backward").normalized() * speed
     velocity = horizontal_velocity.x * global_transform.basis.x + horizontal_velocity.y * global_transform.basis.z

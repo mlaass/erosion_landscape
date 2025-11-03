@@ -3,14 +3,7 @@ extends MeshInstance3D
 class_name InfiniteGenTerrain
 
 ## Infinite procedurally generated terrain using ErosionGeneratorTiled
-## Dynamically generates, fades in/out, and unloads terrain tiles based on player distance
-
-# Tile lifecycle states
-enum TileState {
-  PENDING,      # Queued for generation
-  GENERATING,   # Currently being generated in background thread
-  LOADED        # In memory, ready to render
-}
+## Uses batch precomputation with loading overlay for smooth terrain generation
 
 # Configuration
 @export_group("Fade Settings")
@@ -62,43 +55,24 @@ enum TileState {
 @export var sediment_texture_scale: float = 32.0  ## Sediment texture size in pixels
 @export var rotate_textures_with_flow: bool = true  ## Rotate textures to align with flow direction
 
+@export_group("Batch Generation")
+@export var initial_spawn_tile: Vector2i = Vector2i(0, 0)  ## Initial tile position to center first batch on
+@export var batch_size: int = 16  ## Size of each batch (batch_size × batch_size tiles)
+@export var edge_threshold: int = 0  ## Distance in tiles from boundary to trigger next batch (0 = only when leaving batch)
+@export var max_cached_batches: int = 4  ## Maximum number of batches to keep in memory
+
 @export_group("References")
 @export var player_character: Node3D  ## Player to track for tile generation
 @export var debug_label: Label  ## Optional debug display label
 
 # Internal state
 var terrain_material: ShaderMaterial
-var tiles: Dictionary = {}  # Key: Vector2i, Value: TerrainTile
-var active_tile_slots: Array[TerrainTile] = []  # 4 closest tiles for shader
 var current_shader_tiles: Array[Vector2i] = []  # Track which tiles are currently in shader (avoid redundant uploads)
-var last_active_count: int = -1  # For debug output tracking
 
-# Threading
-var generation_queue: Array[Vector2i] = []
-var generation_queue_set: Dictionary = {}  # For O(1) lookup
-var queue_mutex: Mutex
-var queue_semaphore: Semaphore
-var generation_thread: Thread
-var thread_should_exit: bool = false
-var currently_generating: int = 0
-var cached_player_tile: Vector2i = Vector2i(0, 0)  # Thread-safe cache of player tile position
-
-# Shared erosion generator (reused to avoid creating multiple RenderingDevices)
+# Batch system
+var batch_manager: BatchTileManager
+var loading_overlay: LoadingOverlay
 var erosion_generator: ErosionGeneratorTiled
-
-# Signals for thread communication
-signal tile_generated(tile_pos: Vector2i, heightmap_image: Image)
-
-class TerrainTile:
-  var position: Vector2i
-  var heightmap: ImageTexture
-  var state: TileState
-  var distance_to_player: float = INF
-
-  func _init(pos: Vector2i):
-    position = pos
-    state = TileState.PENDING
-    heightmap = null
 
 func _ready():
   if Engine.is_editor_hint():
@@ -124,12 +98,7 @@ func _ready():
     if "ALPHA" in shader_code:
       print("InfiniteGenTerrain: Shader uses ALPHA, transparency should work")
 
-  # Initialize threading
-  queue_mutex = Mutex.new()
-  queue_semaphore = Semaphore.new()
-  generation_thread = Thread.new()
-
-  # Create shared erosion generator (reused for all tiles to avoid RenderingDevice spam)
+  # Create shared erosion generator
   erosion_generator = ErosionGeneratorTiled.new()
   erosion_generator.map_size = tile_size
   erosion_generator.seed_value = global_seed
@@ -190,42 +159,73 @@ func _ready():
   var mode_str = "texture mode" if erosion_generator.use_texture_erosion else "brush mode"
   print("InfiniteGenTerrain: Shared erosion generator created with 3 layers (erosion: %s)" % mode_str)
 
-  # Connect signal
-  tile_generated.connect(_on_tile_generated)
+  # Create batch manager
+  batch_manager = BatchTileManager.new(erosion_generator)
+  batch_manager.batch_size = batch_size
+  batch_manager.edge_threshold = edge_threshold
+  batch_manager.max_cached_batches = max_cached_batches
+  add_child(batch_manager)
+  print("InfiniteGenTerrain: BatchTileManager created (batch_size: %d, edge_threshold: %d, max_cached: %d)" % [batch_size, edge_threshold, max_cached_batches])
 
-  # Start worker thread
-  generation_thread.start(_worker_thread_loop)
-  print("InfiniteGenTerrain: Worker thread started")
+  # Create loading overlay
+  var overlay_scene = load("res://src/loading_overlay.tscn")
+  loading_overlay = overlay_scene.instantiate()
+  add_child(loading_overlay)
+  print("InfiniteGenTerrain: LoadingOverlay created")
 
-  # Initialize terrain around player
-  if player_character:
-    print("InfiniteGenTerrain: Player found at ", player_character.global_position)
-    _update_terrain()
-  else:
-    push_warning("InfiniteGenTerrain: No player character assigned!")
+  # Connect batch manager signals
+  batch_manager.batch_started.connect(_on_batch_started)
+  batch_manager.tile_completed.connect(_on_tile_completed)
+  batch_manager.batch_completed.connect(_on_batch_completed)
+
+  # Precompute initial batch
+  var initial_region = Rect2i(
+    initial_spawn_tile.x - batch_size / 2,
+    initial_spawn_tile.y - batch_size / 2,
+    batch_size,
+    batch_size
+  )
+  print("InfiniteGenTerrain: Starting initial batch generation for region ", initial_region)
+  batch_manager.precompute_batch(initial_region, null)  # No cache manager for now
 
 func _exit_tree():
   if Engine.is_editor_hint():
     return
 
-  # Signal thread to exit
-  thread_should_exit = true
-  queue_semaphore.post()  # Wake up thread if waiting
-
-  # Wait for thread to finish
-  if generation_thread.is_alive():
-    generation_thread.wait_to_finish()
+  # Cleanup (batch manager will be freed automatically as child node)
 
 func _physics_process(delta):
   if Engine.is_editor_hint() or not player_character:
     return
 
+  # Skip terrain updates during batch generation
+  if batch_manager and batch_manager.generation_in_progress:
+    return
+
   # Move mesh to follow player (like clipmap system)
   _update_mesh_position()
 
-  _update_terrain()
-  _update_active_tiles()
-  _cleanup_distant_tiles()
+  # Update active tiles from batch
+  _update_active_tiles_from_batch()
+
+  # Check if player is near boundary
+  var player_pos = player_character.global_position
+  var player_tile = Vector2i(
+    floor(player_pos.x / tile_size),
+    floor(player_pos.z / tile_size)
+  )
+
+  if batch_manager.check_boundary_proximity(player_tile):
+    var player_velocity = player_character.velocity if player_character.has_method("get_velocity") else Vector3.ZERO
+    var next_region = batch_manager.predict_next_batch(player_tile, player_velocity)
+
+    # Only generate if this region hasn't been precomputed yet
+    if not batch_manager.is_region_precomputed(next_region):
+      print("InfiniteGenTerrain: Player near boundary at ", player_tile, " - generating next batch ", next_region)
+      if player_character.has_method("set"):
+        player_character.paused = true  # Pause player movement
+      batch_manager.precompute_batch(next_region, null)
+
   _update_debug_display()
 
 func _update_mesh_position():
@@ -241,8 +241,29 @@ func _update_mesh_position():
   var target_pos = Vector3(snapped_pos.x, global_position.y, snapped_pos.z)
   global_position = target_pos
 
-func _update_terrain():
-  """Maintain 25-tile window (5x5 grid around player)"""
+## Batch generation signal handlers
+
+func _on_batch_started(total_tiles: int):
+  """Called when batch generation starts"""
+  print("InfiniteGenTerrain: Batch generation started (%d tiles)" % total_tiles)
+  loading_overlay.show_loading(total_tiles)
+
+func _on_tile_completed(tile_index: int, tile_pos: Vector2i, from_cache: bool):
+  """Called when each tile completes"""
+  var total_tiles = batch_size * batch_size
+  loading_overlay.update_progress(tile_index, total_tiles, tile_pos, from_cache)
+
+func _on_batch_completed(region: Rect2i):
+  """Called when batch generation completes"""
+  print("InfiniteGenTerrain: Batch generation completed for region ", region)
+  loading_overlay.hide_loading()
+
+  # Unpause player if paused
+  if player_character and player_character.has_method("set"):
+    player_character.paused = false
+
+func _update_active_tiles_from_batch():
+  """Update shader uniforms with 3x3 grid (9 tiles) around player from batch manager"""
   if not player_character:
     return
 
@@ -252,160 +273,18 @@ func _update_terrain():
     floor(player_pos.z / tile_size)
   )
 
-  # Update cached player tile for worker thread (atomic write, safe without mutex)
-  cached_player_tile = player_tile
+  # Collect tiles in 3x3 grid from batch manager
+  var rendering_tiles: Array[ImageTexture] = []
+  var new_shader_tiles: Array[Vector2i] = []
 
-  # Generate 5x5 grid around player
-  for ty in range(player_tile.y - 2, player_tile.y + 3):
-    for tx in range(player_tile.x - 2, player_tile.x + 3):
-      var tile_pos = Vector2i(tx, ty)
-
-      # Create tile if doesn't exist
-      if not tiles.has(tile_pos):
-        var new_tile = TerrainTile.new(tile_pos)
-        tiles[tile_pos] = new_tile
-        _queue_tile_generation(tile_pos)
-
-func _queue_tile_generation(tile_pos: Vector2i):
-  """Add tile to generation queue if not already queued"""
-  queue_mutex.lock()
-
-  # Check if already in queue or generating
-  if generation_queue_set.has(tile_pos):
-    queue_mutex.unlock()
-    return
-
-  if tiles[tile_pos].state != TileState.PENDING:
-    queue_mutex.unlock()
-    return
-
-  # Add to queue
-  generation_queue.append(tile_pos)
-  generation_queue_set[tile_pos] = true
-  print("InfiniteGenTerrain: Queued tile ", tile_pos, " for generation")
-
-  queue_mutex.unlock()
-
-  # Wake up worker thread
-  queue_semaphore.post()
-
-func _worker_thread_loop():
-  """Background thread loop for tile generation"""
-  while not thread_should_exit:
-    # Wait for work
-    queue_semaphore.wait()
-
-    if thread_should_exit:
-      break
-
-    # Check if we can generate more tiles
-    queue_mutex.lock()
-    if currently_generating >= max_concurrent_generations or generation_queue.is_empty():
-      queue_mutex.unlock()
-      continue
-
-    # Sort queue by distance to player (closest first) and remove tiles outside 5x5 window
-    # Use cached player tile (thread-safe, updated by main thread)
-    var player_tile = cached_player_tile
-
-    # Remove queued tiles outside 5x5 window
-    var i = 0
-    while i < generation_queue.size():
-      var queued_tile_pos = generation_queue[i]
-      # Check if tile is in 5x5 grid around player
-      if abs(queued_tile_pos.x - player_tile.x) > 2 or abs(queued_tile_pos.y - player_tile.y) > 2:
-        generation_queue.remove_at(i)
-        generation_queue_set.erase(queued_tile_pos)
-        print("Worker thread: Removed ", queued_tile_pos, " from queue (outside 5x5 window)")
-      else:
-        i += 1
-
-    # Sort remaining queue by distance to player tile (Manhattan distance for simplicity)
-    generation_queue.sort_custom(func(a, b):
-      var dist_a = abs(a.x - player_tile.x) + abs(a.y - player_tile.y)
-      var dist_b = abs(b.x - player_tile.x) + abs(b.y - player_tile.y)
-      return dist_a < dist_b
-    )
-
-    # Check again after cleanup
-    if generation_queue.is_empty():
-      queue_mutex.unlock()
-      continue
-
-    # Get next tile to generate (closest to player)
-    var tile_pos = generation_queue.pop_front()
-    generation_queue_set.erase(tile_pos)
-    currently_generating += 1
-    queue_mutex.unlock()
-
-    print("Worker thread: Starting generation of tile ", tile_pos)
-
-    # Generate tile (returns Image, not ImageTexture - texture created on main thread)
-    var heightmap_image = _generate_tile_heightmap(tile_pos)
-
-    print("Worker thread: Completed generation of tile ", tile_pos)
-
-    # Signal main thread with Image data (ImageTexture creation deferred to main thread)
-    call_deferred("emit_signal", "tile_generated", tile_pos, heightmap_image)
-
-    # Decrement counter
-    queue_mutex.lock()
-    currently_generating -= 1
-    queue_mutex.unlock()
-
-func _generate_tile_heightmap(tile_pos: Vector2i) -> Image:
-  """Generate heightmap for a tile using shared ErosionGeneratorTiled"""
-  # Just set the tile position and generate (reuses same RenderingDevice)
-  erosion_generator.tile_x = tile_pos.x
-  erosion_generator.tile_y = tile_pos.y
-  erosion_generator.generate_heightmap()
-
-  # Return only the Image data (pixel data) - texture creation happens on main thread
-  return erosion_generator.heightmap_image
-
-func _on_tile_generated(tile_pos: Vector2i, heightmap_image: Image):
-  """Called when a tile finishes generating (on main thread)"""
-  if not tiles.has(tile_pos):
-    print("InfiniteGenTerrain: Warning - received tile ", tile_pos, " but it doesn't exist in tiles dict")
-    return
-
-  # Create ImageTexture from Image on main thread (avoids worker thread blocking)
-  var heightmap_texture = ImageTexture.create_from_image(heightmap_image)
-
-  var tile = tiles[tile_pos]
-  tile.heightmap = heightmap_texture
-  tile.state = TileState.LOADED
-
-  print("InfiniteGenTerrain: Tile ", tile_pos, " loaded and ready to render")
-
-func _update_active_tiles():
-  """Update shader uniforms with 3x3 grid (9 tiles) around player"""
-  if not player_character:
-    return
-
-  var player_pos = player_character.global_position
-  var player_tile = Vector2i(
-    floor(player_pos.x / tile_size),
-    floor(player_pos.z / tile_size)
-  )
-
-  # Collect tiles in 3x3 grid that are loaded
-  var rendering_tiles: Array[TerrainTile] = []
   for ty in range(player_tile.y - 1, player_tile.y + 2):
     for tx in range(player_tile.x - 1, player_tile.x + 2):
       var tile_pos = Vector2i(tx, ty)
-      if tiles.has(tile_pos):
-        var tile = tiles[tile_pos]
-        if tile.heightmap != null and tile.state == TileState.LOADED:
-          rendering_tiles.append(tile)
+      var tile_texture = batch_manager.get_tile(tile_pos)
 
-  # Store for debug display
-  active_tile_slots = rendering_tiles
-
-  # Build list of tile positions that should be in shader
-  var new_shader_tiles: Array[Vector2i] = []
-  for tile in rendering_tiles:
-    new_shader_tiles.append(tile.position)
+      if tile_texture:
+        rendering_tiles.append(tile_texture)
+        new_shader_tiles.append(tile_pos)
 
   # Only update shader if tiles changed (avoid GPU uploads every frame)
   var tiles_changed = false
@@ -426,45 +305,17 @@ func _update_active_tiles():
   var num_to_render = min(9, rendering_tiles.size())
   for i in range(9):
     if i < num_to_render:
-      var tile = rendering_tiles[i]
-      terrain_material.set_shader_parameter("heightmap_" + str(i), tile.heightmap)
+      terrain_material.set_shader_parameter("heightmap_" + str(i), rendering_tiles[i])
       terrain_material.set_shader_parameter("tile_position_" + str(i),
-        Vector2(tile.position.x, tile.position.y))
+        Vector2(new_shader_tiles[i].x, new_shader_tiles[i].y))
     else:
       # Clear unused slots
       terrain_material.set_shader_parameter("heightmap_" + str(i), null)
 
   terrain_material.set_shader_parameter("active_tiles", num_to_render)
 
-func _cleanup_distant_tiles():
-  """Remove tiles outside 5x5 window"""
-  if not player_character:
-    return
-
-  var player_pos = player_character.global_position
-  var player_tile = Vector2i(
-    floor(player_pos.x / tile_size),
-    floor(player_pos.z / tile_size)
-  )
-
-  var tiles_to_remove: Array[Vector2i] = []
-
-  for tile_pos in tiles.keys():
-    # Check if tile is outside 5x5 grid around player
-    if abs(tile_pos.x - player_tile.x) > 2 or abs(tile_pos.y - player_tile.y) > 2:
-      tiles_to_remove.append(tile_pos)
-
-  # Remove distant tiles and free memory
-  for tile_pos in tiles_to_remove:
-    var tile: TerrainTile = tiles[tile_pos]
-    # Free heightmap texture to release GPU memory
-    if tile.heightmap:
-      tile.heightmap = null
-    tiles.erase(tile_pos)
-    print("InfiniteGenTerrain: Unloaded tile ", tile_pos, " (outside 5x5 window)")
-
 func _update_debug_display():
-  """Update debug HUD with terrain system information"""
+  """Update debug HUD with batch terrain system information"""
   if not debug_label:
     return
 
@@ -477,72 +328,47 @@ func _update_debug_display():
     floor(player_pos.z / tile_size)
   )
 
-  # Count tiles by state
-  var pending_count = 0
-  var generating_count = 0
-  var loaded_count = 0
-
-  var loaded_tiles: Array[Vector2i] = []
-  for tile_pos in tiles.keys():
-    var tile: TerrainTile = tiles[tile_pos]
-    loaded_tiles.append(tile_pos)
-    match tile.state:
-      TileState.PENDING:
-        pending_count += 1
-      TileState.GENERATING:
-        generating_count += 1
-      TileState.LOADED:
-        loaded_count += 1
-
-  # Get currently rendering tiles (from active_tile_slots)
-  var rendering_tiles: Array[String] = []
-  for i in range(min(9, active_tile_slots.size())):
-    var tile = active_tile_slots[i]
-    rendering_tiles.append("  [%d] (%d, %d)" % [
-      i, tile.position.x, tile.position.y
-    ])
-
-  # Get queue info
-  queue_mutex.lock()
-  var queue_size = generation_queue.size()
-  var next_tiles = generation_queue.slice(0, min(5, queue_size))
-  queue_mutex.unlock()
-
   # Get memory info
   var memory_static = OS.get_static_memory_usage() / 1024.0 / 1024.0  # MB
   var memory_peak = OS.get_static_memory_peak_usage() / 1024.0 / 1024.0  # MB
 
+  # Get batch info
+  var total_precomputed = batch_manager.precomputed_tiles.size()
+  var num_batches = batch_manager.precomputed_regions.size()
+  var is_generating = "YES" if batch_manager.generation_in_progress else "NO"
+
+  # Get active region info
+  var active_region = batch_manager.active_batch_region
+  var dist_to_edge = "N/A"
+  if active_region.size.x > 0:
+    var dist_to_min_x = player_tile.x - active_region.position.x
+    var dist_to_max_x = (active_region.position.x + active_region.size.x - 1) - player_tile.x
+    var dist_to_min_y = player_tile.y - active_region.position.y
+    var dist_to_max_y = (active_region.position.y + active_region.size.y - 1) - player_tile.y
+    var min_dist = min(dist_to_min_x, dist_to_max_x, dist_to_min_y, dist_to_max_y)
+    dist_to_edge = str(min_dist)
+
   # Build debug text
   var debug_text = ""
-  debug_text += "=== TERRAIN DEBUG ===\n"
+  debug_text += "=== BATCH TERRAIN DEBUG ===\n"
   debug_text += "Memory: %.1f MB (peak: %.1f MB)\n" % [memory_static, memory_peak]
   debug_text += "\n"
   debug_text += "Player World: (%.1f, %.1f, %.1f)\n" % [player_pos.x, player_pos.y, player_pos.z]
   debug_text += "Player Tile: (%d, %d)\n" % [player_tile.x, player_tile.y]
   debug_text += "\n"
-  debug_text += "RENDERING NOW (shader slots):\n"
-  if rendering_tiles.size() > 0:
-    for tile_info in rendering_tiles:
-      debug_text += tile_info + "\n"
+  debug_text += "Generating: %s\n" % is_generating
+  debug_text += "Batch Size: %d×%d (%d tiles)\n" % [batch_size, batch_size, batch_size * batch_size]
+  debug_text += "Batches Loaded: %d\n" % num_batches
+  debug_text += "Tiles Precomputed: %d\n" % total_precomputed
+  debug_text += "Distance to Edge: %s tiles\n" % dist_to_edge
+  debug_text += "\n"
+  debug_text += "Active Batch Region:\n"
+  if active_region.size.x > 0:
+    debug_text += "  Position: (%d, %d)\n" % [active_region.position.x, active_region.position.y]
+    debug_text += "  Size: %d×%d\n" % [active_region.size.x, active_region.size.y]
   else:
     debug_text += "  (none)\n"
   debug_text += "\n"
-  debug_text += "Tiles in Memory: %d (max 25)\n" % tiles.size()
-  debug_text += "  Pending: %d\n" % pending_count
-  debug_text += "  Generating: %d\n" % generating_count
-  debug_text += "  Loaded: %d\n" % loaded_count
-  debug_text += "Rendering (3x3 grid): %d (max 9)\n" % active_tile_slots.size()
-  debug_text += "\n"
-  debug_text += "Queue Size: %d\n" % queue_size
-  if next_tiles.size() > 0:
-    debug_text += "Next in Queue:\n"
-    for tile_pos in next_tiles:
-      var tile_center = Vector3(
-        tile_pos.x * tile_size + tile_size * 0.5,
-        0,
-        tile_pos.y * tile_size + tile_size * 0.5
-      )
-      var dist = player_pos.distance_to(tile_center)
-      debug_text += "  (%d, %d) - dist: %.0f\n" % [tile_pos.x, tile_pos.y, dist]
+  debug_text += "Rendering (3x3 grid): %d (max 9)\n" % current_shader_tiles.size()
 
   debug_label.text = debug_text

@@ -1,0 +1,59 @@
+[gd_scene load_steps=2 format=3 uid="uid://b2nqjpjl3uwxa"]
+
+[ext_resource type="Script" path="res://src/loading_overlay.gd" id="1_loading_overlay"]
+
+[node name="LoadingOverlay" type="CanvasLayer"]
+script = ExtResource("1_loading_overlay")
+
+[node name="ColorRect" type="ColorRect" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.8)
+
+[node name="CenterContainer" type="CenterContainer" parent="ColorRect"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="ColorRect/CenterContainer"]
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="ColorRect/CenterContainer/PanelContainer"]
+layout_mode = 2
+theme_override_constants/separation = 20
+custom_minimum_size = Vector2(500, 0)
+
+[node name="Title" type="Label" parent="ColorRect/CenterContainer/PanelContainer/VBoxContainer"]
+layout_mode = 2
+text = "Generating Terrain"
+horizontal_alignment = 1
+theme_override_font_sizes/font_size = 24
+
+[node name="ProgressBar" type="ProgressBar" parent="ColorRect/CenterContainer/PanelContainer/VBoxContainer"]
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+value = 50.0
+show_percentage = false
+
+[node name="StatusLabel" type="Label" parent="ColorRect/CenterContainer/PanelContainer/VBoxContainer"]
+layout_mode = 2
+text = "Initializing..."
+horizontal_alignment = 1
+
+[node name="ScrollContainer" type="ScrollContainer" parent="ColorRect/CenterContainer/PanelContainer/VBoxContainer"]
+custom_minimum_size = Vector2(0, 300)
+layout_mode = 2
+
+[node name="LogText" type="RichTextLabel" parent="ColorRect/CenterContainer/PanelContainer/VBoxContainer/ScrollContainer"]
+layout_mode = 2
+bbcode_enabled = true
+text = "[b]Terrain Generation Log[/b]
+
+Waiting to start..."
+fit_content = true
+scroll_following = true
