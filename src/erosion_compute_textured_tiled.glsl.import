@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://77m8xwpoaoqv"
+path="res://.godot/imported/erosion_compute_textured_tiled.glsl-69e3bd83c98fae40ea8950faacd588d8.res"
+
+[deps]
+
+source_file="res://src/erosion_compute_textured_tiled.glsl"
+dest_files=["res://.godot/imported/erosion_compute_textured_tiled.glsl-69e3bd83c98fae40ea8950faacd588d8.res"]
+
+[params]
+

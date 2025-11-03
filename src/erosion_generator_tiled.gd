@@ -2,7 +2,8 @@
 extends HeightmapGenerator
 class_name ErosionGeneratorTiled
 
-var erosion_compute_shader: RID
+var erosion_compute_shader: RID  # Classic brush-based shader
+var erosion_compute_textured_shader: RID  # Texture-based shader
 var brush_indices: PackedInt32Array
 var brush_weights: PackedFloat32Array
 var voronoi_generator: VoronoiGenerator  # Reused for all Voronoi generation
@@ -55,9 +56,16 @@ func initialize_compute() -> void:
   if not rd:
     rd = RenderingServer.create_local_rendering_device()
 
+  # Load classic brush-based shader
   var shader_file := load("res://src/erosion_compute_tiled.glsl")
   var shader_spirv: RDShaderSPIRV = shader_file.get_spirv()
   erosion_compute_shader = rd.shader_create_from_spirv(shader_spirv)
+
+  # Load texture-based shader
+  var textured_shader_file := load("res://src/erosion_compute_textured_tiled.glsl")
+  var textured_shader_spirv: RDShaderSPIRV = textured_shader_file.get_spirv()
+  erosion_compute_textured_shader = rd.shader_create_from_spirv(textured_shader_spirv)
+
   create_erosion_brush()
 
   # Create reusable Voronoi generator
@@ -331,6 +339,13 @@ func generate_erosion_heightmap_tiled():
   var brush_weights_buffer = rd.storage_buffer_create(brush_weights.size() * 4, brush_weights.to_byte_array())
   var droplet_buffer = rd.storage_buffer_create(droplet_positions.size() * 8, droplet_positions.to_byte_array())
 
+  # Choose which shader to use
+  var active_shader: RID
+  if use_texture_erosion and textures_loaded:
+    active_shader = erosion_compute_textured_shader
+  else:
+    active_shader = erosion_compute_shader
+
   var uniforms := [
     create_uniform(heightmap_buffer, 0),
     create_uniform(brush_indices_buffer, 1),
@@ -338,7 +353,7 @@ func generate_erosion_heightmap_tiled():
     create_uniform(droplet_buffer, 3)
   ]
 
-  # Add texture uniforms if using texture mode
+  # Add texture uniforms if using textured shader
   if use_texture_erosion and textures_loaded:
     # Create texture uniforms (binding 4 and 5)
     var erosion_tex_uniform = RDUniform.new()
@@ -356,10 +371,13 @@ func generate_erosion_heightmap_tiled():
     uniforms.append(sediment_tex_uniform)
 
     if debug_output:
-      print("Added texture uniforms for texture-based erosion")
+      print("Using texture-based erosion shader")
+  else:
+    if debug_output:
+      print("Using classic brush-based erosion shader")
 
-  var uniform_set = rd.uniform_set_create(uniforms, erosion_compute_shader, 0)
-  var pipeline = rd.compute_pipeline_create(erosion_compute_shader)
+  var uniform_set = rd.uniform_set_create(uniforms, active_shader, 0)
+  var pipeline = rd.compute_pipeline_create(active_shader)
 
   var params := PackedFloat32Array([
     # Block 1
@@ -391,13 +409,18 @@ func generate_erosion_heightmap_tiled():
     float(tile_y),
     float(seed_value),
     0.0,  # padding
-
-    # Block 6: Texture erosion parameters
-    1.0 if (use_texture_erosion and textures_loaded) else 0.0,  # use_texture_mode
-    float(erosion_texture_scale),
-    float(sediment_texture_scale),
-    1.0 if rotate_textures_with_flow else 0.0,  # rotate_with_flow
   ])
+
+  # Add Block 6 only for textured shader (96 bytes total)
+  if use_texture_erosion and textures_loaded:
+    params.append_array(PackedFloat32Array([
+      # Block 6: Texture erosion parameters
+      1.0,  # use_texture_mode (always 1.0 in textured shader)
+      float(erosion_texture_scale),
+      float(sediment_texture_scale),
+      1.0 if rotate_textures_with_flow else 0.0,  # rotate_with_flow
+    ]))
+  # Classic shader uses 80 bytes (5 blocks), textured uses 96 bytes (6 blocks)
 
   var workgroup_size = 16
   var num_workgroups = (droplet_positions.size() + workgroup_size - 1) / workgroup_size
