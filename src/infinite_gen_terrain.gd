@@ -54,6 +54,14 @@ enum TileState {
 @export var gravity: float = 10.0  ## Gravity strength
 @export var inertia: float = 0.3  ## Droplet momentum/inertia
 
+@export_group("Texture-Based Erosion (Experimental)")
+@export var use_texture_erosion: bool = false  ## Toggle between brush and texture mode
+@export var erosion_texture_path: String = ""  ## Path to erosion intensity texture (grayscale)
+@export var sediment_texture_path: String = ""  ## Path to sediment deposition texture (grayscale)
+@export var erosion_texture_scale: float = 32.0  ## Erosion texture size in pixels
+@export var sediment_texture_scale: float = 32.0  ## Sediment texture size in pixels
+@export var rotate_textures_with_flow: bool = true  ## Rotate textures to align with flow direction
+
 @export_group("References")
 @export var player_character: Node3D  ## Player to track for tile generation
 @export var debug_label: Label  ## Optional debug display label
@@ -163,7 +171,23 @@ func _ready():
   erosion_generator.start_water = 1.0
   erosion_generator.inertia = inertia
 
-  print("InfiniteGenTerrain: Shared erosion generator created with 3 layers")
+  # === TEXTURE-BASED EROSION ===
+  erosion_generator.use_texture_erosion = use_texture_erosion
+  erosion_generator.erosion_texture_path = erosion_texture_path
+  erosion_generator.sediment_texture_path = sediment_texture_path
+  erosion_generator.erosion_texture_scale = erosion_texture_scale
+  erosion_generator.sediment_texture_scale = sediment_texture_scale
+  erosion_generator.rotate_textures_with_flow = rotate_textures_with_flow
+
+  # Load texture if texture mode enabled
+  if use_texture_erosion:
+    var loaded = erosion_generator.load_erosion_textures()
+    if not loaded:
+      print("Warning: Failed to load erosion textures, falling back to classic brush mode")
+      erosion_generator.use_texture_erosion = false
+
+  var mode_str = "texture mode" if erosion_generator.use_texture_erosion else "brush mode"
+  print("InfiniteGenTerrain: Shared erosion generator created with 3 layers (erosion: %s)" % mode_str)
 
   # Connect signal
   tile_generated.connect(_on_tile_generated)

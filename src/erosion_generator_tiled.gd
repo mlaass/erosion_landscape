@@ -32,6 +32,22 @@ var droplets_per_tile: int = 500  # Droplets spawned per tile
 var enable_erosion: bool = true  # Toggle erosion on/off
 var erosion_intensity: float = 1.0  # 0.0 = no erosion, 1.0 = full erosion (opacity blend)
 
+# Texture-based erosion (experimental)
+var use_texture_erosion: bool = false  # false = brush mode, true = texture mode
+var erosion_texture_path: String = ""
+var sediment_texture_path: String = ""
+var erosion_texture_scale: float = 32.0  # Size in pixels (32 = 32×32 area)
+var sediment_texture_scale: float = 32.0
+var rotate_textures_with_flow: bool = true
+
+# Runtime texture data (internal)
+var erosion_texture_image: Image = null
+var sediment_texture_image: Image = null
+var erosion_texture_rid: RID = RID()
+var sediment_texture_rid: RID = RID()
+var texture_sampler_rid: RID = RID()
+var textures_loaded: bool = false
+
 func _init():
   initialize_compute()
 
@@ -120,6 +136,110 @@ func create_erosion_brush():
 
   if debug_output:
     print("Created brush with ", brush_indices.size(), " indices")
+
+func create_texture_sampler() -> bool:
+  if not rd:
+    return false
+
+  # Create sampler with linear filtering for smooth texture sampling
+  var sampler_state = RDSamplerState.new()
+  sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+  sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
+  sampler_state.repeat_u = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
+  sampler_state.repeat_v = RenderingDevice.SAMPLER_REPEAT_MODE_CLAMP_TO_EDGE
+
+  texture_sampler_rid = rd.sampler_create(sampler_state)
+
+  if texture_sampler_rid.is_valid():
+    if debug_output:
+      print("Created texture sampler")
+    return true
+  else:
+    printerr("Failed to create texture sampler")
+    return false
+
+func load_erosion_textures() -> bool:
+  if not rd:
+    printerr("No rendering device for texture loading")
+    return false
+
+  # Validate texture paths
+  if erosion_texture_path.is_empty() or sediment_texture_path.is_empty():
+    if debug_output:
+      print("Texture paths not set, falling back to brush mode")
+    use_texture_erosion = false
+    return false
+
+  # Load erosion texture
+  if FileAccess.file_exists(erosion_texture_path):
+    erosion_texture_image = Image.load_from_file(erosion_texture_path)
+    if erosion_texture_image == null:
+      printerr("Failed to load erosion texture: ", erosion_texture_path)
+      use_texture_erosion = false
+      return false
+
+    # Convert to RGBAF format for compute shader
+    if erosion_texture_image.get_format() != Image.FORMAT_RGBAF:
+      erosion_texture_image.convert(Image.FORMAT_RGBAF)
+
+    # Create texture RID
+    var texture_format = RDTextureFormat.new()
+    texture_format.width = erosion_texture_image.get_width()
+    texture_format.height = erosion_texture_image.get_height()
+    texture_format.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
+    texture_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT
+
+    erosion_texture_rid = rd.texture_create(texture_format, RDTextureView.new(), [erosion_texture_image.get_data()])
+
+    if not erosion_texture_rid.is_valid():
+      printerr("Failed to create erosion texture RID")
+      use_texture_erosion = false
+      return false
+  else:
+    printerr("Erosion texture file not found: ", erosion_texture_path)
+    use_texture_erosion = false
+    return false
+
+  # Load sediment texture
+  if FileAccess.file_exists(sediment_texture_path):
+    sediment_texture_image = Image.load_from_file(sediment_texture_path)
+    if sediment_texture_image == null:
+      printerr("Failed to load sediment texture: ", sediment_texture_path)
+      use_texture_erosion = false
+      return false
+
+    if sediment_texture_image.get_format() != Image.FORMAT_RGBAF:
+      sediment_texture_image.convert(Image.FORMAT_RGBAF)
+
+    var texture_format = RDTextureFormat.new()
+    texture_format.width = sediment_texture_image.get_width()
+    texture_format.height = sediment_texture_image.get_height()
+    texture_format.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
+    texture_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT
+
+    sediment_texture_rid = rd.texture_create(texture_format, RDTextureView.new(), [sediment_texture_image.get_data()])
+
+    if not sediment_texture_rid.is_valid():
+      printerr("Failed to create sediment texture RID")
+      use_texture_erosion = false
+      return false
+  else:
+    printerr("Sediment texture file not found: ", sediment_texture_path)
+    use_texture_erosion = false
+    return false
+
+  # Create sampler
+  if not create_texture_sampler():
+    use_texture_erosion = false
+    return false
+
+  textures_loaded = true
+  if debug_output:
+    print("Erosion textures loaded successfully")
+    print("  Erosion texture: ", erosion_texture_path, " (", erosion_texture_image.get_width(), "x", erosion_texture_image.get_height(), ")")
+    print("  Sediment texture: ", sediment_texture_path, " (", sediment_texture_image.get_width(), "x", sediment_texture_image.get_height(), ")")
+
+  return true
 
 func generate_erosion_heightmap_tiled():
   if not rd:
@@ -218,6 +338,26 @@ func generate_erosion_heightmap_tiled():
     create_uniform(droplet_buffer, 3)
   ]
 
+  # Add texture uniforms if using texture mode
+  if use_texture_erosion and textures_loaded:
+    # Create texture uniforms (binding 4 and 5)
+    var erosion_tex_uniform = RDUniform.new()
+    erosion_tex_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+    erosion_tex_uniform.binding = 4
+    erosion_tex_uniform.add_id(texture_sampler_rid)
+    erosion_tex_uniform.add_id(erosion_texture_rid)
+    uniforms.append(erosion_tex_uniform)
+
+    var sediment_tex_uniform = RDUniform.new()
+    sediment_tex_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+    sediment_tex_uniform.binding = 5
+    sediment_tex_uniform.add_id(texture_sampler_rid)
+    sediment_tex_uniform.add_id(sediment_texture_rid)
+    uniforms.append(sediment_tex_uniform)
+
+    if debug_output:
+      print("Added texture uniforms for texture-based erosion")
+
   var uniform_set = rd.uniform_set_create(uniforms, erosion_compute_shader, 0)
   var pipeline = rd.compute_pipeline_create(erosion_compute_shader)
 
@@ -251,6 +391,12 @@ func generate_erosion_heightmap_tiled():
     float(tile_y),
     float(seed_value),
     0.0,  # padding
+
+    # Block 6: Texture erosion parameters
+    1.0 if (use_texture_erosion and textures_loaded) else 0.0,  # use_texture_mode
+    float(erosion_texture_scale),
+    float(sediment_texture_scale),
+    1.0 if rotate_textures_with_flow else 0.0,  # rotate_with_flow
   ])
 
   var workgroup_size = 16
