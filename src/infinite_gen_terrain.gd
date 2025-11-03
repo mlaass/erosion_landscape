@@ -70,6 +70,7 @@ enum TileState {
 var terrain_material: ShaderMaterial
 var tiles: Dictionary = {}  # Key: Vector2i, Value: TerrainTile
 var active_tile_slots: Array[TerrainTile] = []  # 4 closest tiles for shader
+var current_shader_tiles: Array[Vector2i] = []  # Track which tiles are currently in shader (avoid redundant uploads)
 var last_active_count: int = -1  # For debug output tracking
 
 # Threading
@@ -86,7 +87,7 @@ var cached_player_tile: Vector2i = Vector2i(0, 0)  # Thread-safe cache of player
 var erosion_generator: ErosionGeneratorTiled
 
 # Signals for thread communication
-signal tile_generated(tile_pos: Vector2i, heightmap: ImageTexture)
+signal tile_generated(tile_pos: Vector2i, heightmap_image: Image)
 
 class TerrainTile:
   var position: Vector2i
@@ -339,36 +340,40 @@ func _worker_thread_loop():
 
     print("Worker thread: Starting generation of tile ", tile_pos)
 
-    # Generate tile
-    var heightmap = _generate_tile_heightmap(tile_pos)
+    # Generate tile (returns Image, not ImageTexture - texture created on main thread)
+    var heightmap_image = _generate_tile_heightmap(tile_pos)
 
     print("Worker thread: Completed generation of tile ", tile_pos)
 
-    # Signal main thread
-    call_deferred("emit_signal", "tile_generated", tile_pos, heightmap)
+    # Signal main thread with Image data (ImageTexture creation deferred to main thread)
+    call_deferred("emit_signal", "tile_generated", tile_pos, heightmap_image)
 
     # Decrement counter
     queue_mutex.lock()
     currently_generating -= 1
     queue_mutex.unlock()
 
-func _generate_tile_heightmap(tile_pos: Vector2i) -> ImageTexture:
+func _generate_tile_heightmap(tile_pos: Vector2i) -> Image:
   """Generate heightmap for a tile using shared ErosionGeneratorTiled"""
   # Just set the tile position and generate (reuses same RenderingDevice)
   erosion_generator.tile_x = tile_pos.x
   erosion_generator.tile_y = tile_pos.y
   erosion_generator.generate_heightmap()
 
-  return erosion_generator.heightmap_texture
+  # Return only the Image data (pixel data) - texture creation happens on main thread
+  return erosion_generator.heightmap_image
 
-func _on_tile_generated(tile_pos: Vector2i, heightmap: ImageTexture):
-  """Called when a tile finishes generating"""
+func _on_tile_generated(tile_pos: Vector2i, heightmap_image: Image):
+  """Called when a tile finishes generating (on main thread)"""
   if not tiles.has(tile_pos):
     print("InfiniteGenTerrain: Warning - received tile ", tile_pos, " but it doesn't exist in tiles dict")
     return
 
+  # Create ImageTexture from Image on main thread (avoids worker thread blocking)
+  var heightmap_texture = ImageTexture.create_from_image(heightmap_image)
+
   var tile = tiles[tile_pos]
-  tile.heightmap = heightmap
+  tile.heightmap = heightmap_texture
   tile.state = TileState.LOADED
 
   print("InfiniteGenTerrain: Tile ", tile_pos, " loaded and ready to render")
@@ -397,7 +402,27 @@ func _update_active_tiles():
   # Store for debug display
   active_tile_slots = rendering_tiles
 
-  # Update shader uniforms (up to 9 tiles)
+  # Build list of tile positions that should be in shader
+  var new_shader_tiles: Array[Vector2i] = []
+  for tile in rendering_tiles:
+    new_shader_tiles.append(tile.position)
+
+  # Only update shader if tiles changed (avoid GPU uploads every frame)
+  var tiles_changed = false
+  if new_shader_tiles.size() != current_shader_tiles.size():
+    tiles_changed = true
+  else:
+    for i in range(new_shader_tiles.size()):
+      if new_shader_tiles[i] != current_shader_tiles[i]:
+        tiles_changed = true
+        break
+
+  if not tiles_changed:
+    return  # No change, skip shader parameter updates
+
+  # Tiles changed - update shader parameters
+  current_shader_tiles = new_shader_tiles.duplicate()
+
   var num_to_render = min(9, rendering_tiles.size())
   for i in range(9):
     if i < num_to_render:
